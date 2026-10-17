@@ -1,0 +1,4 @@
+add_subdirectory(core)
+add_subdirectory(proxy_opengl32)
+add_subdirectory(mod)
+add_subdirectory(launcher)

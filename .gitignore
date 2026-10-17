@@ -1,0 +1,16 @@
+# Build output
+/build/
+/out/
+/.vs/
+*.user
+*.suo
+
+# Development copy of the commercial game (never committed)
+/.gamedev/
+
+# Local tool caches and logs
+/tools/_cache/
+__pycache__/
+*.pyc
+*.log
+/h47vr-logs/

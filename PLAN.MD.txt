@@ -1,0 +1,129 @@
+# Hitman: Codename 47 VR mod feasibility and development plan
+
+## Recommendation and feasibility
+
+**Build a native mod that hooks the commercial game, using targeted reverse engineering. A complete decompilation is unnecessary.** Your chosen target is Quest through PC VR, with tracked controllers and hybrid physical interactions, initially covering training plus one mission.
+
+My assessment:
+
+| Capability | Assessment |
+|---|---|
+| Run alongside the commercial game | Strong architectural fit; verify loading first |
+| First-person stereo and head tracking | Plausible; rendering needs a prototype |
+| Controller-directed weapon aiming | Plausible; requires gameplay hooks |
+| Tracked hands, grabbing, two-hand support | Substantial custom work |
+| Manual reloads and fully physical interactions | Separate, much larger extension |
+| Entire campaign compatibility | Requires extensive mission testing |
+
+These are engineering judgments, not demonstrated results. I inspected the installed files and configuration; I have not run or instrumented the game.
+
+Local findings support investigating this approach:
+
+- The executable and inspected engine modules are **32-bit x86**.
+- Most gameplay resides in `HitmanDlc.dlc`, which is a Windows executable module despite its extension.
+- Separate Direct3D and OpenGL renderer DLLs exist; configuration currently selects Direct3D.
+- The OpenGL renderer imports projection, matrix, viewport, and geometry functions that provide useful investigation points.
+- Gameplay exports include named camera and action callbacks.
+- Virtual Desktop's OpenXR runtime is registered for both process architectures.
+- An existing widescreen plugin needs compatibility testing.
+
+## How the decompilation projects help
+
+**re47: useful reference, insufficient as a replacement engine.** Its published status lists the main gameplay module and OpenGL renderer as 0% decompiled, with some functions named; Direct3D is untouched. It uses the GOG version, so its addresses cannot be assumed to match your Steam installation. The repository is also archived. [re47 status](https://github.com/0danny/re47)
+
+Its build configuration includes an experimental mod framework. I inspected its free-camera source: it hooks a projection-related function and changes OpenGL transforms, using a fixed address. This is a useful clue, but does not demonstrate stereo, working first-person gameplay, or independent aiming. Reidentify the function in your binaries and validate its behavior. [Free-camera experiment](https://github.com/0danny/re47/blob/main/src_testing/impl_swap/menu/mods/freecam.cpp)
+
+**decompdecomp: optional research aid.** It offers function matching and Ghidra-assisted Windows analysis, but Windows support is beta, and its platform table does not promise a rebuildable Windows export. Matching the original compiler's output is also a different goal from implementing VR. Use it only for selected difficult functions after validating its workflow against this game; do not put it on the critical path. [decompdecomp capabilities and limitations](https://github.com/n-delic/decompdecomp#platforms)
+
+**Ghidra should be the main static-analysis tool.** Recover only the camera, rendering, input, weapon, collision, and interaction interfaces needed by the mod. Confirm decompiler interpretations through debugging. [Ghidra](https://github.com/NationalSecurityAgency/ghidra)
+
+Keep original game binaries and assets out of the mod package. Treat re47 as reference material by default; check licensing before incorporating its code.
+
+## Architecture and tools
+
+Build a **modern C++ x86 plugin**, with these internal boundaries:
+
+- **Game adapter:** validated hooks for camera, player movement, weapon firing, interaction targets, and game state.
+- **VR backend:** OpenXR session, predicted headset/controller poses, actions, haptics, and frame submission.
+- **Rendering adapter:** eye rendering, projection overrides, render targets, and separation of world geometry from menus.
+- **Interaction layer:** tracked hands, weapon alignment, two-hand support, grabbing, and existing game actions.
+
+Use a small launcher to load the plugin into the original game. Avoid depending on the unidentified existing loader; test its widescreen plugin separately. Resolve hooks using module fingerprints and validated signatures, and disable unsupported builds before applying patches.
+
+| Tool | Planned purpose |
+|---|---|
+| [Ghidra](https://github.com/NationalSecurityAgency/ghidra) | Recover structures, calling conventions, and relevant call paths |
+| [x32dbg, supplied with x64dbg](https://github.com/x64dbg/x64dbg) | Validate live addresses, arguments, and state changes |
+| [MinHook](https://github.com/TsudaKageyu/minhook) | Install x86 function hooks |
+| [apitrace](https://github.com/apitrace/apitrace) | Inspect OpenGL rendering and distinguish world/UI passes |
+| [OpenXR SDK and examples](https://github.com/KhronosGroup/OpenXR-SDK-Source) | Validate runtime support and implement VR integration |
+| Current Visual Studio C++ tools and CMake | Build the new mod independently of the original compiler |
+
+Start with the **OpenGL renderer for investigation**, because it exposes useful matrix operations and has relevant re47 experiments. Keep Direct3D as a fallback investigation route, rather than implementing two backends immediately.
+
+The first technical gate must establish the graphics bridge: test direct OpenXR/OpenGL compatibility, including the runtime’s context requirements. If unavailable, test OpenGL-to-D3D11 GPU texture sharing and submit through OpenXR/D3D11. Do not assume that registered 32-bit runtime support guarantees either path works. CPU image copies are acceptable for diagnostics, not the intended release architecture.
+
+## Development milestones
+
+**1. Establish a baseline and prove the integration points**
+
+- Fingerprint the installed modules and record existing plugins/configuration.
+- Work in a separate development copy, preserving the Steam installation.
+- Verify normal gameplay in both renderers and isolate widescreen-plugin effects.
+- Locate camera transforms, world rendering, visibility calculation, input dispatch, and weapon firing.
+- Validate an x86 OpenXR session on the connected Quest.
+- Deliver a hook map and graphics-bridge result.
+
+**Gate:** proceed only after demonstrating a workable VR graphics path and a controllable camera. Otherwise, document the failed assumptions and revise the architecture before building interactions.
+
+**2. Prove correct stereo rendering**
+
+- Update gameplay once, then render both eyes from the same simulation state.
+- Use the runtime’s eye poses and asymmetric projections.
+- Apply camera changes before relevant visibility calculations; expand visibility conservatively where necessary.
+- Prevent a second eye pass from repeating animation updates, scripts, audio, particles, or weapon events.
+- Calibrate game units to meters, eye height, and near clipping.
+- Hide the player’s head where needed and separate gameplay camera control from headset orientation.
+
+**Gate:** demonstrate correct positional parallax, stable world scale, and unchanged simulation speed in training.
+
+**3. Build the playable VR slice**
+
+- Add tracked controller hands and independent weapon aiming.
+- Make shots follow the actual weapon/muzzle direction, with nearby obstruction checks.
+- Add trigger firing, grip-based grabbing, two-hand stabilization, and basic haptics.
+- Use a radial equipment menu; retain buttons for reloads, disguises, and complex scripted actions.
+- Route interactions through original gameplay rules so distance checks, inventory, AI reactions, and mission scripts remain authoritative.
+- Provide stick movement, snap turning, recentering, and configurable handedness.
+- Handle physical head movement near walls with collision limits and a fade.
+
+**4. Finish training and the first Hong Kong mission**
+
+Use the first Hong Kong mission to exercise outdoor visibility, distant targets, scopes, NPC behavior, and mission transitions.
+
+- Present menus, map, inventory, and briefing screens on a controller-operated VR panel.
+- Initially show cutscenes on a virtual screen.
+- Implement scopes through a dedicated aiming view.
+- Verify loading, death, restarts, scripted camera changes, and mission completion.
+- Package the plugin, launcher, configuration, diagnostic logging, and removal instructions.
+
+Manual magazine handling, physics-based melee, physical garrote simulation, and campaign-wide certification remain later milestones.
+
+## Acceptance tests and effort assumptions
+
+Release the slice only when:
+
+- Stereo remains correct across head translation, rotation, recentering, and turning.
+- Rendering twice does not double gameplay events or change game speed.
+- Controller aim, muzzle position, impact location, and obstruction handling agree.
+- Grabbing and two-hand support preserve original inventory and mission behavior.
+- Menus, scopes, death, and scripted sequences remain usable.
+- Lost tracking, headset removal, and runtime focus changes recover cleanly.
+- Training and the selected mission can be completed entirely in VR.
+- Installation/removal preserves the commercial game, and unknown builds receive a clear compatibility message.
+
+Target native **72 Hz initially**—a 13.9 ms frame interval—then assess higher refresh rates using measured CPU/GPU timings. Runtime and encoding overhead require additional headroom.
+
+Assume controller tracking, with Virtual Desktop as the first runtime to validate; exact Quest model and GPU remain hardware-validation inputs. Standalone Quest execution is outside this plan.
+
+For one experienced developer, budget approximately **2–4 weeks for the feasibility investigation**, followed by **several months for a polished playable slice**. These are provisional planning estimates. Stereo rendering and independent weapon control must be proven before committing to a reliable delivery schedule.

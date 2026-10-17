@@ -1,0 +1,28 @@
+# Supported build pins for the mod.
+#
+# Format, one record per line, whitespace separated:
+#   key     value   ...
+#
+# Keys:
+#   appid   <steam appid>
+#   buildid <steam buildid>
+#   module  <path relative to the game directory>  <sha256 uppercase hex>
+#
+# The mod refuses to patch a game that does not match every module below.
+# The same file is consumed by tools/fingerprint.ps1 and by the build
+# (cmake/GeneratePins.cmake -> h47vr/pins_generated.h).
+
+appid 6900
+buildid 251800
+
+module Hitman.Exe        137C3CBF328225085CF3532819B4574714FBA263A6121328DE6583BA8A0648F5
+module HitmanDlc.dlc     201AF466CB75048314D38572446505DFF54B233D2060E678BF76DA871E1CD7C1
+module System.dll        DB2A6AC1664E04AE6C36ED70321A07279196453A1458F0283DC5D17D2B73BC95
+module RenderOpenGL.dll  3C15227D21760590947E7023C721D6290CCEC04E67138AA46ED47BC8A9C4663A
+module EngineData.dll    01A20275C75C960EBCD3D13A81D9BDEF051FA9AD3D3B1DC22FBF6BB21D5EFEDA
+module Globals.dll       010E8F9B8596E33EECF41CB303DFC12A702F9ECB600C5890AC66317C6E3AD750
+module gsc.dll           663CA7A8DAAE84406A3B2A8344B3C509D9859BC1D9E180ED6632BF48338EF8EF
+module Locale.dll        6391BE08D43C12D91E20AF4829C3420A269292462B7EBBCF3BB64C966989AA33
+module Sound.dll         1CA948CFC078819346E8FC2419F39FEA5DE3C8CE012D00DC771BC5F17672E794
+module DSOUND.dll        FF66B6CF72CD8C58F09016B4E2428B4BF0984CCCDBC2781C0EB94DA2966DE8E4
+module scripts/h1w.asi   8E5D4E82E603B51C6BADDAF95EC31CA7ABDD1B7776B0A5963FC5B66DCBDA2702

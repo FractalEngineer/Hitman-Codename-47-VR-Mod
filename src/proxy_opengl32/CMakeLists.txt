@@ -3,6 +3,7 @@
 # the system renderer and every export it provides is forwarded on.
 add_library(h47vr_opengl32 SHARED
     dllmain.cpp
+    gl_probe.cpp
     proxy.cpp
     opengl32_exports.generated.cpp
     opengl32.def)

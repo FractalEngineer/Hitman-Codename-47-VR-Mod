@@ -35,6 +35,13 @@ its own and control is handed over. There is no skip string anywhere in the
 module (cutscenes are `CutSequence` data on a fixed timeline), so a test loop
 should push, wait for the cutscene, then drive the camera.
 
+**The camera is now driven from the mod.** The engine transforms its own
+geometry, so the view cannot be moved through the GL matrix pipeline; it is
+moved where the vertices are, at the proxy's `glVertex3fv`/`glVertex3f` slot.
+`h47vr-cam.txt` carries `yaw=.. pitch=..` and about 2,900 eye-space vertices per
+frame are rotated by it. Verified numerically; visual confirmation in a loaded
+level is the one thing still outstanding.
+
 ## Working commands
 
 ```powershell
@@ -61,6 +68,15 @@ consumed on sight. Its payload decides what happens:
 | `push:<level>` | **the working level load** (game's own slot) |
 | `<mode>:<name>` | call the EngineData command entry directly with that mode |
 | anything else | console `startscene <line>` (dead end, kept for reference) |
+
+Control files next to the game (all optional, delete to disable):
+
+| File | Effect |
+| --- | --- |
+| `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
+| `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
+| `h47vr-no-glprobe.txt` | shorthand for `none` |
+| `h47vr-glmatrix.txt` | while the file exists, log every changed `glLoadMatrixf` matrix |
 
 ## Environment
 
@@ -102,6 +118,17 @@ consumed on sight. Its payload decides what happens:
 - **Level entry, keyboard-free.** See above. Verified end to end by the user.
 - **Gameplay camera observed.** `_ZCAMERA_MouseConCam` fires (rarely - it is
   camera setup, not the per-frame update), with a stable first argument.
+- **GL pipeline intercepted at the proxy boundary.** Every generated proxy thunk
+  loads a slot and jumps to it, so writing that slot intercepts the call with no
+  code patching and no engine address. `src/proxy_opengl32/gl_probe.cpp` does
+  this for the matrix, transform and vertex entries, and publishes an install /
+  report pair through `h47vr_core` so the injected-module build stays free of a
+  link dependency on the proxy.
+- **Camera injection.** A 3x3 rotation is applied to every vertex submitted while
+  the current projection is the perspective one; the front end and HUD draw
+  through an orthographic projection and are left untouched. About 2,900
+  vertices per frame, ~4.2M transformed in one run, and it turns on and off from
+  a file with no relaunch.
 - **Console/config dispatcher reached in-process.** `System.dll` RVA `0xE590`
   is `__thiscall(object, name, arg)` with `ret 8`, verified from the machine code
   at its call site (RVA `0x104AD`) and its prologue. It splits a line at the
@@ -158,6 +185,22 @@ reached from the world object: `world->vtbl[0x2c]()` (strings, get/set via
 The world object is `*(interface + 0x59)` - an odd but verified offset
 (`mov ecx, [edi+0x59]` in the dispatcher's prologue).
 
+Per-frame GL traffic in a loaded level (2,400 frames, once the GL probe is in),
+which is the shape everything in Milestone 2 has to fit into:
+
+| Entry | Per frame | Notes |
+| --- | --- | --- |
+| `glVertex3fv` | ~2,900 | eye-space vertices, immediate mode |
+| `glBegin` / `glEnd` | ~900 | one pair per primitive batch |
+| `glMatrixMode` | ~11 | projection/modelview/texture switches |
+| `glViewport` | ~6.7 | |
+| `glLoadIdentity` | ~6.8 | |
+| `glFrustum` | ~1.9 | 34.52 deg fov, near 5, far 16000 |
+| `glOrtho` | ~1.0 | the 2D passes |
+| `glLoadMatrixf` | ~2.9 | 1 modelview (identity), 2 others (projection, texture) |
+| `glPushMatrix` / `glPopMatrix` / `glMultMatrixf` / `glRotatef` / `glScalef` | 0 | never used |
+| `glVertexPointer` / `glDrawElements` / `glDrawArrays` | 0 | no vertex arrays |
+
 ## Dead ends - do not revisit
 
 - **Console `startscene <name>`.** It "succeeds" (`-> 1`) and loads nothing. The
@@ -175,6 +218,22 @@ The world object is `*(interface + 0x59)` - an odd but verified offset
   ignore VK-only zero-duration taps), and focus was verified. It still never
   skipped the intro. The user presses ESC. Do not pour more time into input
   injection unless it becomes necessary.
+- **Moving the camera through the GL matrix pipeline.** There is no camera
+  matrix there to move: `glLoadMatrixf` in modelview is identity once per frame,
+  and `glPushMatrix`, `glPopMatrix`, `glMultMatrixf`, `glRotatef` and `glScalef`
+  are never called at all across a whole session (0 calls over 2,400 frames).
+  The only matrix in the pipeline is the projection, and it is camera-independent.
+- **`_ZCAMERA_*` exports as the per-frame camera.** They are wing-group class
+  *descriptors*. `_ZCAMERA_MouseConCam` fills a descriptor with a constructor, a
+  float, an id and its name; the object is built later by that constructor
+  (0x93 bytes, vtable `PTR_FUN_0feb1748`; `BaseCamera` 0x32 bytes, vtable
+  `PTR_FUN_0feb1104`). Hooking the export reports class instantiation, not camera
+  updates.
+- **Screen capture and synthetic input from the tooling shell.** `PrintWindow`
+  returns a black frame and both `CopyFromScreen` and a raw `BitBlt` from the
+  desktop DC fail with "the handle is invalid" even when escalated, while window
+  enumeration by PID works fine. Verification has to be numeric, or come from the
+  user.
 - **`llLevels`** is the archive name inside `AllLevels/...` paths, not a
   level-selection property.
 
@@ -223,22 +282,32 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
   logged from the loader-notification thread.
 - PowerShell `-File` splits comma lists into separate argv entries; split inside
   the script.
-- Screenshots: `CopyFromScreen` on the window rect grabs whatever is on top.
-  Ask the user, or bring the game forward first.
+- Screenshots from the tooling shell do not work at all here (`PrintWindow`
+  returns black, `CopyFromScreen` and `BitBlt` fail) - see the dead ends. Do not
+  spend a launch on a picture; make the check numeric, or ask the user.
+- The proxy's matrix log is gated on `<game>\h47vr-glmatrix.txt`: the front end
+  rewrites its projection and texture matrices every frame and would spend the
+  whole budget before a level loads.
+- The GL probe can be bisected without a rebuild: put the export names in
+  `h47vr-glprobe.txt`, or `none` to turn the whole probe off.
 
 ## Immediate next steps
 
-1. **Camera control** (closes the Milestone 1 gate, and the foundation for
-   Milestone 2). `_ZCAMERA_MouseConCam` is at `0x0264D0` and now fires on demand
-   after a `push:`, with a stable first argument. Find what it is called with,
-   locate the camera transform it uses, modify it from the mod, and confirm the
-   view moves. `_ZCAMERA_MainCameraControl` (`0x023940`) and `_ZCAMERA_BaseCamera`
-   (`0x020E80`) are the neighbouring candidates.
-2. **Redo the world-geometry part of the renderer map.** `objectDrawA` was wrong;
-   find the real per-object draw path so a loaded level can be detected without
-   the user's eyes.
-3. **Milestone 2.** Eye loop at `RenderOpenGL` `0x0048F0` (once per frame);
-   recover the `glFrustum` caller for asymmetric per-eye projections (Ghidra has
-   not defined the containing function - use `DecompileAt`).
-4. Install x32dbg if a calling convention ever needs confirming instead of
+1. **Close the Milestone 1 gate**: confirm the view really moves in a loaded
+   level. The user's eyes are the only reliable observer here. `h47vr-cam.txt`
+   with `yaw=60` is on, and the injected rotation is the only change to the
+   picture. After that, turn the fixed offset into a pose: the same vertex hook
+   is where per-eye rotation and translation belong.
+2. **Make the camera two-eyed.** The projection is set by `glFrustum` (34.52 deg
+   fov, near 5, far 16000) and by hand into a 45 deg matrix; both entries are
+   already intercepted, so stereo is a change of arguments and a second viewport
+   rather than a new hook.
+3. **Redo the world-geometry part of the renderer map.** `objectDrawA`
+   (RenderOpenGL RVA `0x6590`) never runs - `glPushMatrix`, `glPopMatrix` and
+   `glMultMatrixf` are 0 calls - so the world path is immediate mode:
+   `glBegin`/`glEnd` with ~2,900 `glVertex3fv` per frame. "The perspective
+   projection is current and vertices are flowing" is a usable level signal that
+   needs no eyes.
+4. **Milestone 2.** Eye loop at `RenderOpenGL` `0x0048F0` (once per frame).
+5. Install x32dbg if a calling convention ever needs confirming instead of
    deriving (so far deriving from the machine code has been enough).

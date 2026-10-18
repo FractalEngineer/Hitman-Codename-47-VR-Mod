@@ -54,7 +54,44 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] Renderer map: GL import call-site analysis (`tools/ghidra/DumpReferences.java`) plus
       in-process call-rate confirmation, which identified the frame boundary and the four
       2D UI passes
-- [ ] Controllable camera: drive the camera from the mod and observe it move in a loaded level
+- [~] **Controllable camera: the view is now driven from the mod, 2026-10-19.** The engine does
+      its own view transform - the GL modelview is always identity and the projection is a plain
+      perspective - so the camera cannot be moved through the matrix pipeline. It is moved where
+      the geometry is: the proxy's `glVertex3fv`/`glVertex3f` slot, which about 2,900 eye-space
+      vertices per frame pass through in immediate mode. A 3x3 rotation is applied to each one
+      while the perspective projection is current (the front end and HUD draw through an
+      orthographic projection and are left alone). `h47vr-cam.txt` - `yaw=.. pitch=..` - turns it
+      on and off. Verified numerically: 4.19M vertices transformed, the gate turns on and off
+      cleanly, and the vertices are provably eye-space. Visual confirmation in a loaded level is
+      still outstanding
+- [x] GL pipeline probe at the proxy boundary: the engine's GL calls are intercepted by
+      redirecting the proxy's *own* export slots (`src/proxy_opengl32/gl_probe.cpp`). Every thunk
+      in the generated proxy loads a slot and jumps to it, so writing the slot intercepts the call
+      with no code patching and no engine address. Control files: `h47vr-glprobe.txt` (comma list
+      of exports), `h47vr-no-glprobe.txt` (none), `h47vr-glmatrix.txt` (matrix log gate)
+- [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
+      `glLoadMatrixf` in modelview is identity once per frame, and `glPushMatrix`, `glPopMatrix`,
+      `glMultMatrixf`, `glRotatef` and `glScalef` are never called at all. The only matrix the GL
+      pipeline carries is the projection (built by `glFrustum` at 34.52 deg fov / near 5 / far
+      16000, and by hand into a 45 deg projection). The world therefore arrives at `glVertex3fv`
+      in eye space - ~2,900 vertices and ~900 `glBegin`/`glEnd` pairs per frame
+- [x] Corrected: the exported `_ZCAMERA_*` symbols are wing-group *class descriptors*, not the
+      per-frame camera. `_ZCAMERA_MouseConCam` (RVA `0x0264D0`) fills a descriptor with its
+      constructor `FUN_0fce6500`, a float `1000.0`, an id and the name, and the camera object is
+      built by that constructor (0x93 bytes, vtable `PTR_FUN_0feb1748`; `BaseCamera` is 0x32
+      bytes, vtable `PTR_FUN_0feb1104`). Hooking the export only reports when the camera class is
+      instantiated, which is why it fires so rarely
+- [x] Corrected: the tooling process cannot see or drive the game's desktop. `PrintWindow`
+      returns a black frame, and both `CopyFromScreen` and a raw `BitBlt` from the desktop DC fail
+      with "the handle is invalid", even when escalated - while window enumeration by PID works.
+      That is the reason the synthetic ESC bursts never skipped the intro: the keys had nowhere to
+      land. The user presses ESC, and the user is the only reliable observer of the picture; all
+      verification from the tooling side has to be numeric
+- [~] Open risk: one launch (the first one carrying the GL probe) presented five frames and then
+      went idle - all 30 threads waiting on `UserRequest`, no dialog, CPU frozen - and never
+      recovered. It has not reproduced in six later launches, two of them with the identical full
+      interception set, so it is recorded as an unexplained one-off rather than a proven
+      regression. It looks the same as the intro stalls the user hit repeatedly by hand
 - [ ] Reach gameplay automatically: `objectDrawA > 0` after the console driver submits
       `startscene C0_1` (blocker for the Milestone 1 gate)
 - [x] **Gameplay reached, 2026-10-19.** The training mission loaded with a controllable

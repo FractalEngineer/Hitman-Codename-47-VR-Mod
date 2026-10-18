@@ -2,6 +2,7 @@
 
 #include "h47vr/console_driver.hpp"
 #include "h47vr/fingerprint.hpp"
+#include "h47vr/gl_probe.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/paths.hpp"
@@ -14,6 +15,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <mutex>
 #include <atomic>
 
@@ -24,6 +26,30 @@ std::mutex g_mutex;
 bool g_started = false;
 bool g_compatible = false;
 std::wstring g_gameDirectory;
+
+// First non-empty line of a small text file, trimmed. Used for the one-shot
+// control files the tools drop next to the game; a missing file yields an empty
+// string.
+std::string FirstLine(const std::wstring& path) {
+    std::ifstream file(path);
+    std::string line;
+    while (std::getline(file, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n' ||
+                                 line.back() == ' ' || line.back() == '\t')) {
+            line.pop_back();
+        }
+        const auto first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) {
+            continue;
+        }
+        line.erase(0, first);
+        if (line[0] == '#') {
+            continue;
+        }
+        return line;
+    }
+    return {};
+}
 
 void LogSystemContext() {
     SYSTEM_INFO info{};
@@ -177,6 +203,7 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
     if (frame % 120 == 0) {
         HooksFlushModuleEvents();
         RendererProbeReport(frame);
+        GlProbeReport(frame);
     }
     return g_real_swap_buffers(device);
 }
@@ -324,6 +351,20 @@ bool Initialize(const char* trigger) {
     HooksInitialize();
     InstallRendererHooks();
     InstallConsoleCapture();
+    // The GL seam has to be in place before the renderer draws, so it is
+    // installed here rather than at the first presented frame. The filter file
+    // names the entries to intercept, so a misbehaving one can be pinned down
+    // without a rebuild; h47vr-no-glprobe.txt is shorthand for "none".
+    std::string glFilter = "all";
+    const std::wstring glFilterPath = JoinPath(g_gameDirectory, L"h47vr-glprobe.txt");
+    if (FileExists(glFilterPath)) {
+        glFilter = FirstLine(glFilterPath);
+    }
+    if (FileExists(JoinPath(g_gameDirectory, L"h47vr-no-glprobe.txt"))) {
+        glFilter = "none";
+    }
+    H47VR_LOG_INFO("gl probe: filter '%s'", glFilter.c_str());
+    GlProbeInstall(glFilter.c_str());
     SceneProbeInstall();
     ConsoleDriverInstall();
     WatchModuleLoads(L"HitmanDlc.dlc", &RequestReinstall);

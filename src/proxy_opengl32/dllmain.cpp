@@ -2,6 +2,12 @@
 
 #include <windows.h>
 
+// Defined in gl_probe.cpp. It lives in this target because the GL seam is the
+// proxy's own slot table, which no other module has.
+namespace h47vr {
+void GlProbePublish();
+}
+
 namespace {
 
 // The loader lock is held while DllMain runs, so the mod does its file and
@@ -17,6 +23,7 @@ BOOL APIENTRY DllMain(HMODULE self, DWORD reason, LPVOID reserved) {
     switch (reason) {
         case DLL_PROCESS_ATTACH: {
             ::DisableThreadLibraryCalls(self);
+            ::h47vr::GlProbePublish();
             HANDLE thread = ::CreateThread(nullptr, 0, &RunModStartup, nullptr, 0, nullptr);
             if (thread != nullptr) {
                 ::CloseHandle(thread);

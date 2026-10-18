@@ -11,9 +11,9 @@ as the work**.
 
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
-Everything below is committed and pushed at `7d02cd1`. The game may still be
-running from the last test, in the training level, with the camera injection
-off; it runs happily in the background now, so it is safe to leave or kill.
+Everything below is committed and pushed at `5607234`. The game is not running
+right now. It keeps rendering while you use the desktop, so a session is free to
+launch it and walk away.
 
 ## Where things stand (2026-10-19)
 
@@ -391,11 +391,13 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 
 ## Immediate next steps
 
-1. **Close the Milestone 1 gate**: confirm the view really moves in a loaded
-   level. The user's eyes are the only reliable observer here. `h47vr-cam.txt`
-   with `yaw=60` is on, and the injected rotation is the only change to the
-   picture. After that, turn the fixed offset into a pose: the same vertex hook
-   is where per-eye rotation and translation belong.
+1. **Find and drive the engine's world-to-eye transform.** Milestone 1's gate is
+   closed - the user has confirmed the injected view moves - but the vertex-level
+   rotation cannot defeat the engine's culling, so a free look needs the engine's
+   own view driven. The leads are the call-validated stacks under "Still missing"
+   above; `camera_probe.cpp` already hooks `FUN_0fd56120` and captures its stable
+   first stack argument. Once the transform is offset, the same vertex hook is
+   where per-eye rotation and translation belong.
 2. **Make the camera two-eyed.** The projection is set by `glFrustum` (34.52 deg
    fov, near 5, far 16000) and by hand into a 45 deg matrix; both entries are
    already intercepted, so stereo is a change of arguments and a second viewport

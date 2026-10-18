@@ -61,9 +61,14 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       vertices per frame pass through in immediate mode. A 3x3 rotation is applied to each one
       while the perspective projection is current (the front end and HUD draw through an
       orthographic projection and are left alone). `h47vr-cam.txt` - `yaw=.. pitch=..` - turns it
-      on and off. Verified numerically: 4.19M vertices transformed, the gate turns on and off
-      cleanly, and the vertices are provably eye-space. Visual confirmation in a loaded level is
-      still outstanding
+      on and off. Verified numerically (4.19M vertices transformed, the gate turns on and off
+      cleanly, and the vertices are provably eye-space) **and visually confirmed by the user in a
+      loaded level**: the view turns with `h47vr-cam.txt`. Two limits remain, and they are the
+      current work. The engine culls against the frustum of the camera *it* believes it has, so a
+      large injected yaw shows the scene with pieces missing (the user's words: "we're just
+      completely clipping"); and an injected rotation visibly wrecks the front end's in-engine
+      openings. Rotating vertices cannot bring back culled geometry - the engine's own view
+      transform has to be driven instead, which is the next task (leads in `docs/HANDOFF.md`)
 - [x] GL pipeline probe at the proxy boundary: the engine's GL calls are intercepted by
       redirecting the proxy's *own* export slots (`src/proxy_opengl32/gl_probe.cpp`). Every thunk
       in the generated proxy loads a slot and jumps to it, so writing the slot intercepts the call
@@ -106,8 +111,10 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       frame, quantize with `__ftol`, pack. The earlier "camera located" claim came from a crude
       stack scan, which finds stale code addresses as readily as return addresses, and it was
       wrong
-- [ ] Reach gameplay automatically: `objectDrawA > 0` after the console driver submits
-      `startscene C0_1` (blocker for the Milestone 1 gate)
+- [x] Corrected: "reach gameplay automatically" was originally gated on `objectDrawA > 0` after a
+      console `startscene`, and both halves of that are wrong - `startscene` loads nothing and
+      `objectDrawA` is not a world-geometry signal. The real answer is the keyboard-free level
+      entry below, and the usable level signal is the gameplay camera firing, not a draw counter
 - [x] **Gameplay reached, 2026-10-19.** The training mission loaded with a controllable
       player at 62 FPS and `_ZCAMERA_MouseConCam` was seen firing for the first time
       (`#1` front end, `#2` at level start) - the Milestone 1 signal this project has been
@@ -147,7 +154,7 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation
-- [ ] Vendor MinHook
+- [x] Vendor MinHook (`third_party/minhook`, v1.3.4) - it carries the shipping detours
 
 ### Milestone 1 - baseline and integration points
 

@@ -74,6 +74,20 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       in the generated proxy loads a slot and jumps to it, so writing the slot intercepts the call
       with no code patching and no engine address. Control files: `h47vr-glprobe.txt` (comma list
       of exports), `h47vr-no-glprobe.txt` (none), `h47vr-glmatrix.txt` (matrix log gate)
+- [~] **Engine camera hunt, 2026-10-19.** The vertex-level rotation cannot be the whole answer, so
+      the engine's own camera is being found *empirically* instead of by reading the decompiler,
+      which mis-reads this code's stack arguments - that is exactly how the last argument of `Clip`
+      came to be mistaken for a camera. Settled by disassembly (`tools/ghidra/DumpRange.java`):
+      `FUN_0fd53c50` is the ZGEOM `Clip` method and reaches `glVertex3fv`; `FUN_0fd56120` is
+      `CamUpdate` and stores its own object into the scratch it hands `Clip`
+      (`mov [ebp-0x2018], esi` at `0xfd56279`); `Clip` then reads a float triple at
+      `[cam+0x106]` and feeds it to `FUN_0fe7b730`, an integer box test. Live capture shows that
+      triple is a world position which moves with the view, so the camera object is identifiable
+      at run time as the `CamUpdate` object whose `+0x106` has a large magnitude. Its rotation is
+      *not* stored as an orthonormal 3x3 in its first `0x800` bytes even when scanning at 2-byte
+      offsets, so it is either derived per frame or stored some other way. `h47vr-camobj.txt` now
+      drives this probe: it reports each candidate's `+0x106` and how many dwords moved since the
+      last tick
 - [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
       `glLoadMatrixf` in modelview is identity once per frame, and `glPushMatrix`, `glPopMatrix`,
       `glMultMatrixf`, `glRotatef` and `glScalef` are never called at all. The only matrix the GL

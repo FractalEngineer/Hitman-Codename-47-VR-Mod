@@ -108,7 +108,7 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
 | `h47vr-glmatrix.txt` | while the file exists, log every changed `glLoadMatrixf` matrix |
 | `h47vr-stack.txt` | dump a few stacks at `glVertex3fv`, to re-find the engine's transform |
-| `h47vr-camobj.txt` | dump whatever the `0x93C50` hook has captured (periodic) |
+| `h47vr-camobj.txt` | world probe: reports every camera candidate's `+0x106` triple and how many dwords moved since the last tick |
 
 Two things the injected rotation cannot do, both worth remembering:
 

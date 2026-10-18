@@ -39,6 +39,33 @@ needed anyway, notably everything inside `RenderOpenGL.dll`, which exports only
 | Diagnostic log | Implemented; `<game>\h47vr-logs\h47vr-<timestamp>.log`, flushed per line |
 | Standalone injectable module | Implemented (`h47vr_mod.dll`) as a diagnostic path |
 | Mod work thread | Runs off the loader lock, started from `DllMain` |
+| Hook engine (MinHook) | Implemented, initialised in-process |
+| Deferred gameplay hooking | Implemented via `LdrRegisterDllNotification`; fires on `HitmanDlc.dlc` load |
+| Presentation hook | `gdi32!SwapBuffers` installed and firing; frames are counted |
+| First camera hook | `_ZCAMERA_MouseConCam` installed at RVA `0x0264D0`; not yet observed firing |
+
+Measured in one run of the shipping build:
+
+```
+hooked gdi32.dll!SwapBuffers at 77815BE0
+module loaded: HitmanDlc.dlc - running deferred hooks
+HitmanDlc.dlc base 0E980000, camera entry rva 0x0264D0
+hooked HitmanDlc.dlc!_ZCAMERA_MouseConCam at 0E9A64D0
+presented frame 1 ... presented frame 5
+```
+
+Two things that run machine-check the reverse engineering:
+
+- `0x0E9A64D0 - 0x0E980000 = 0x264D0`, the RVA recorded in the table below from
+  the Ghidra pass. The module relocated: its preferred base is `0x0FCC0000`, so
+  a hard-coded address would have hooked the wrong bytes. Recording RVAs was the
+  right call.
+- The `SwapBuffers` hook covers presentation, confirming the earlier conclusion
+  that it lives in `gdi32`, not `opengl32`.
+
+`_ZCAMERA_MouseConCam` has not been seen firing: the process only reached the
+front end, and that entry point belongs to active gameplay. Confirming it needs
+a level loaded, which needs someone at the controls.
 
 The proxy never loads the system library from `DllMain`. Export thunks resolve it
 on first call through `InitOnceExecuteOnce`.

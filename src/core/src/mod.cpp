@@ -1,6 +1,7 @@
 #include "h47vr/mod.hpp"
 
 #include "h47vr/fingerprint.hpp"
+#include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/symbols.hpp"
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <atomic>
 
 namespace h47vr::mod {
 namespace {
@@ -92,6 +94,64 @@ void LogSymbolProbes() {
     }
 }
 
+// --- hooks -----------------------------------------------------------------
+
+// SwapBuffers is presented from gdi32, not opengl32, so it is the presentation
+// hook and the first place a real frame count can come from.
+using SwapBuffersFn = BOOL(WINAPI*)(HDC);
+SwapBuffersFn g_real_swap_buffers = nullptr;
+std::atomic<unsigned long> g_presented_frames{0};
+
+BOOL WINAPI HookSwapBuffers(HDC device) {
+    const unsigned long frame = ++g_presented_frames;
+    // First few frames, then a heartbeat: enough to prove presentation is
+    // intercepted and to estimate the rate without flooding the log.
+    if (frame <= 5 || frame % 600 == 0) {
+        H47VR_LOG_INFO("presented frame %lu", frame);
+    }
+    return g_real_swap_buffers(device);
+}
+
+// The gameplay entry points are exported with a leading underscore and no @N
+// suffix, which is MSVC's cdecl decoration rather than stdcall. An unknown
+// arity is therefore safe: the caller cleans the stack, so forwarding more
+// arguments than the target uses changes nothing.
+using GameplayFn = void(__cdecl*)(void*, void*, void*, void*, void*, void*, void*, void*);
+GameplayFn g_real_mouse_con_cam = nullptr;
+std::atomic<unsigned long> g_camera_calls{0};
+
+void __cdecl HookMouseConCam(void* a, void* b, void* c, void* d,
+                             void* e, void* f, void* g, void* h) {
+    const unsigned long call = ++g_camera_calls;
+    if (call <= 8 || call % 600 == 0) {
+        H47VR_LOG_INFO("_ZCAMERA_MouseConCam #%lu  a=%p b=%p c=%p d=%p",
+                       call, a, b, c, d);
+    }
+    g_real_mouse_con_cam(a, b, c, d, e, f, g, h);
+}
+
+// Runs once HitmanDlc.dlc appears, which is after the proxy has started.
+void InstallGameplayHooks() {
+    const HMODULE gameplay = LoadedModule(L"HitmanDlc.dlc");
+    void* target = ResolveSymbol(L"HitmanDlc.dlc", "_ZCAMERA_MouseConCam");
+    if (gameplay != nullptr && target != nullptr) {
+        const auto offset = static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(target) -
+            reinterpret_cast<std::uintptr_t>(gameplay));
+        H47VR_LOG_INFO("HitmanDlc.dlc base %p, camera entry rva 0x%06llX",
+                       gameplay, offset);
+    }
+    HookSymbol(L"HitmanDlc.dlc", "_ZCAMERA_MouseConCam",
+               reinterpret_cast<void*>(&HookMouseConCam),
+               reinterpret_cast<void**>(&g_real_mouse_con_cam));
+}
+
+void InstallRendererHooks() {
+    HookSymbol(L"gdi32.dll", "SwapBuffers",
+               reinterpret_cast<void*>(&HookSwapBuffers),
+               reinterpret_cast<void**>(&g_real_swap_buffers));
+}
+
 }  // namespace
 
 bool Initialize(const char* trigger) {
@@ -143,9 +203,13 @@ bool Initialize(const char* trigger) {
 
     LogSymbolProbes();
 
+    HooksInitialize();
+    InstallRendererHooks();
+    WatchModuleLoad(L"HitmanDlc.dlc", &InstallGameplayHooks);
+
     H47VR_LOG_INFO(
-        "milestone 1: hook installation is not implemented yet; the mod is "
-        "currently a verified loader with diagnostics only.");
+        "milestone 1: presentation and camera interception installed; no "
+        "rendering or camera modification yet.");
 
     g_compatible = true;
     return true;

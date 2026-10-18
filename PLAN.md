@@ -24,8 +24,11 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] Ghidra headless pipeline plus shared PE tooling (`tools/ghidra-analyze.ps1`, `tools/peutils.py`)
 - [x] Hook targets resolved by exported name, confirmed live for `Globals.dll` and
       `System.dll` (`g_pSysInput` at RVA `0x3014`, `RunEngine` at `0xA790`)
-- [ ] Deferred hook installation on module load (`LdrRegisterDllNotification`), required
-      because `HitmanDlc.dlc` is not loaded when the proxy starts
+- [x] Deferred hook installation on module load (`LdrRegisterDllNotification`); fires when
+      `HitmanDlc.dlc` arrives, which is after the proxy starts
+- [x] First real detours in the shipping build: `gdi32!SwapBuffers` (firing, frames counted)
+      and `_ZCAMERA_MouseConCam` (installed at RVA `0x0264D0`)
+- [ ] Controllable camera: drive the camera from the mod and observe it move in a loaded level
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation

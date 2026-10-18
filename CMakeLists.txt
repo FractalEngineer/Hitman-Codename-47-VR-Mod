@@ -50,4 +50,21 @@ add_library(h47vr_pins_headers INTERFACE)
 add_dependencies(h47vr_pins_headers h47vr_pins)
 target_include_directories(h47vr_pins_headers INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
+# ---------------------------------------------------------------------------
+# Vendored dependencies
+# ---------------------------------------------------------------------------
+set(H47VR_MINHOOK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/minhook")
+set(H47VR_MINHOOK_LIB "${H47VR_MINHOOK_ROOT}/lib/x86/minhook.lib")
+
+if(NOT EXISTS "${H47VR_MINHOOK_LIB}")
+    message(FATAL_ERROR
+        "h47vr: ${H47VR_MINHOOK_LIB} is missing.\n"
+        "Run tools/fetch-minhook.ps1 to build the 32-bit MinHook library.")
+endif()
+
+add_library(h47vr_minhook STATIC IMPORTED GLOBAL)
+set_target_properties(h47vr_minhook PROPERTIES
+    IMPORTED_LOCATION "${H47VR_MINHOOK_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${H47VR_MINHOOK_ROOT}/include")
+
 add_subdirectory(src)

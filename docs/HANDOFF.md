@@ -32,8 +32,15 @@ through a 13-entry `strcmp` chain, logs `Prescene push %s`, and calls that slot.
 Confirmed by the user: the push lands **exactly at the start of the level**. A
 scripted cutscene plays before control - **ESC skips it**, otherwise it ends on
 its own and control is handed over. There is no skip string anywhere in the
-module (cutscenes are `CutSequence` data on a fixed timeline), so a test loop
-should push, wait for the cutscene, then drive the camera.
+module (cutscenes are `CutSequence` data), so a test loop should push, wait for
+the cutscene, then drive the camera.
+
+**The intro and the level openings are in-engine rendered scenes, not video.**
+The user confirmed this, and it explains two things that looked unrelated: an
+injected view rotation visibly wrecks the openings, and the engine can sit in one
+indefinitely (all threads idle, no CPU) until ESC advances it. Three launches
+have gone idle that way, one of them 3.5 s after launch with no level involved.
+Treat "log stops growing" as "an opening is waiting for ESC", not as a crash.
 
 **The camera is now driven from the mod.** The engine transforms its own
 geometry, so the view cannot be moved through the GL matrix pipeline; it is
@@ -78,6 +85,7 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
 | `h47vr-glmatrix.txt` | while the file exists, log every changed `glLoadMatrixf` matrix |
 | `h47vr-stack.txt` | dump a few stacks at `glVertex3fv`, to re-find the engine's transform |
+| `h47vr-camobj.txt` | dump the engine's camera object fields, via the `0x93C50` hook |
 
 Two things the injected rotation cannot do, both worth remembering:
 
@@ -212,6 +220,13 @@ which is the shape everything in Milestone 2 has to fit into:
 | `glLoadMatrixf` | ~2.9 | 1 modelview (identity), 2 others (projection, texture) |
 | `glPushMatrix` / `glPopMatrix` / `glMultMatrixf` / `glRotatef` / `glScalef` | 0 | never used |
 | `glVertexPointer` / `glDrawElements` / `glDrawArrays` | 0 | no vertex arrays |
+
+`src/core/src/camera_probe.cpp` hooks the same function (`0x93C50`) to keep a
+live pointer to the camera object: it reads the last stack argument, verifies it
+points at committed memory, and remembers it. `h47vr-camobj.txt` makes the frame
+report dump the object's raw words, the same words as floats, and the 3x3 view
+rotation behind field `+4`. That pointer is the handle for driving the engine's
+camera, which is the only way to rotate the view without the culling fighting it.
 
 The engine's own camera, found by scanning the stack at `glVertex3fv` and then
 decompiling the frames (see `tools/_ghidra_out/HitmanDlc.dlc.at.FUN_0fd53c50.c`):

@@ -1,6 +1,7 @@
 #include "h47vr/mod.hpp"
 
 #include "h47vr/console_driver.hpp"
+#include "h47vr/camera_probe.hpp"
 #include "h47vr/fingerprint.hpp"
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/hooks.hpp"
@@ -204,6 +205,7 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
         HooksFlushModuleEvents();
         RendererProbeReport(frame);
         GlProbeReport(frame);
+        CameraProbeReport(frame);
     }
     return g_real_swap_buffers(device);
 }
@@ -268,6 +270,7 @@ void ApplyReinstall() {
 
     if (gameplay != nullptr) {
         InstallGameplayHooks();
+        CameraProbeInstall();
     }
     if (renderer != nullptr) {
         RendererProbeReset();

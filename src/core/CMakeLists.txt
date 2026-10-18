@@ -4,6 +4,7 @@ add_library(h47vr_core STATIC
     src/log.cpp
     src/fingerprint.cpp
     src/gl_probe.cpp
+    src/camera_probe.cpp
     src/symbols.cpp
     src/hooks.cpp
     src/renderer_probe.cpp

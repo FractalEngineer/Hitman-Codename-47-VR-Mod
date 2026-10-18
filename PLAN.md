@@ -87,14 +87,14 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       That is the reason the synthetic ESC bursts never skipped the intro: the keys had nowhere to
       land. The user presses ESC, and the user is the only reliable observer of the picture; all
       verification from the tooling side has to be numeric
-- [~] Open risk: twice now a launch has presented frames and then gone idle for good - all 30
-      threads waiting on `UserRequest`, no dialog, CPU frozen, no recovery. Once 3.5 s after
-      launch, during the intro videos; once 32 s in, just after a level push, while the level was
-      already drawing 5.3M vertices. Eight other launches, including several with the identical
-      interception set, were fine. The logger has no cross-thread cycle, so this is not obviously
-      ours, and it looks exactly like the intro stalls the user has hit repeatedly by hand. Treat
-      it as environment flakiness with a retry, and note that the first stall happened before any
-      level push
+- [~] Open risk, now better understood: three launches have presented frames and then gone idle -
+      all 30 threads waiting on `UserRequest`, no dialog, CPU frozen. Once 3.5 s after launch,
+      twice after a level push while the level was already drawing millions of vertices. The last
+      one came back on its own with the picture still rendering, so this is a *stall on an
+      in-engine scene waiting to be advanced*, not a crash, and ESC is the way out - which is
+      consistent with the intro needing a human ESC in the first place. The logger has no
+      cross-thread cycle. The remedy for a test loop is a timeout-and-ESC, or a scene without an
+      opening cutscene
 - [x] The engine's camera object located, 2026-10-19, from a stack scan at `glVertex3fv`: in
       `FUN_0fd53c50` (`HitmanDlc.dlc` RVA `0x93C50`) a vertex is turned into eye space as
       `eye = R * (world - camPos)`, where `R` is a 3x3 reached through `param_5[1]` and `camPos`
@@ -215,9 +215,13 @@ Gate: positional parallax, stable world scale, unchanged simulation speed in tra
 - [x] Ghidra pass over the binaries (`HitmanDlc.dlc`, `System.dll`, `Globals.dll`,
       `EngineData.dll`, `RenderOpenGL.dll` analysed; 190 anchors and 1927 references
       in the gameplay module)
-- [x] The game does **not** reach the menu by itself: the intro videos need a human ESC. A
-      scene request submitted on a frame schedule always lands during the videos, which is why
+- [x] The game does **not** reach the menu by itself: the intro sequence needs a human ESC. A
+      scene request submitted on a frame schedule always lands during the intro, which is why
       the mod now fires on demand (`h47vr-go.txt`) instead
+- [x] Corrected, and it matters: the intro and the level openings are **not video files**. The
+      user confirms they are fully in-engine rendered scenes, which is why they are affected by
+      the camera at all - an injected view rotation visibly wrecks them, and the engine can sit
+      in one indefinitely until ESC advances it
 - [x] Level transitions reload the engine's modules, discarding every patch installed by
       address; hooks have to be re-armed after a load, not installed once
 

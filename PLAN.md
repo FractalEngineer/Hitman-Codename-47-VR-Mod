@@ -82,6 +82,13 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       `lProfileManager`, `lCurrentProfile`, `strPreScene`. The level-name table is data at
       `HitmanDlc.dlc` `0x0FD3B6xx`, read by the profile/level-select code
       (`FUN_0fd3be80`, `FUN_0fd3e580`)
+- [x] **Repeatable, keyboard-free level entry - solved, 2026-10-19.** The game's own level
+      start is `world->vtbl[0x88](levelName, 0, 0)`, read out of `FUN_0fd3b609`
+      (HitmanDlc.dlc RVA `0x7B609`): it reads the string property `strPreScene`, maps the `_Pre`
+      name to the plain level name through a 13-entry `strcmp` chain, logs `Prescene push %s`,
+      and calls that slot. Driving the slot from the mod loaded the training level with **no
+      keyboard input at all**, straight from the intro screen, with the gameplay camera firing
+      0.6 s later. Ask for it with `tools/drive.ps1 -Scene 'push:C0_Training\C0_1'`
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation

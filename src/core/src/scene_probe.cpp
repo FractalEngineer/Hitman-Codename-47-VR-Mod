@@ -117,4 +117,35 @@ int SceneEntryInvoke(void* object, int mode, const char* first, const char* seco
                                     first, second);
 }
 
+// The scene push the PreScene screen performs, `(*(world + 0x88))(name, 0, 0)`.
+constexpr int kWorldPushSlot = 0x88 / 4;
+
+extern "C" void* h47vr_push_scene_self = nullptr;
+extern "C" void* h47vr_push_scene_fn = nullptr;
+
+extern "C" __declspec(naked) int __stdcall h47vr_invoke_push_scene(const char*, const char*,
+                                                                  const char*) {
+    __asm {
+        mov ecx, dword ptr [h47vr_push_scene_self]
+        jmp dword ptr [h47vr_push_scene_fn]
+    }
+}
+
+int ScenePushLevel(void* world, const char* levelName) {
+    if (world == nullptr || levelName == nullptr) {
+        return -1;
+    }
+    void** vtable = *reinterpret_cast<void***>(world);
+    if (vtable == nullptr) {
+        return -2;
+    }
+    void* entry = vtable[kWorldPushSlot];
+    if (entry == nullptr) {
+        return -3;
+    }
+    h47vr_push_scene_self = world;
+    h47vr_push_scene_fn = entry;
+    return h47vr_invoke_push_scene(levelName, nullptr, nullptr);
+}
+
 }  // namespace h47vr

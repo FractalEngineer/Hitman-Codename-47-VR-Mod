@@ -31,4 +31,15 @@ void SceneProbeMarkOwnCall();
 // `*(interface + 0x59)`.
 int SceneEntryInvoke(void* object, int mode, const char* first, const char* second);
 
+// Loads a level the way the PreScene screen does: `world->vtbl[0x88](name, 0, 0)`.
+//
+// Taken from the game's own level start, `FUN_0fd3b609` in HitmanDlc.dlc: it
+// reads the string property `strPreScene`, maps the `_Pre` name to the plain
+// level name, logs "Prescene push %s", and calls that slot. `name` is the plain
+// form from the level table, e.g. `C0_Training\C0_1`.
+//
+// Returns the slot's result, or a negative value when the object or slot is
+// unavailable. This is the repeatable, keyboard-free way into gameplay.
+int ScenePushLevel(void* world, const char* levelName);
+
 }  // namespace h47vr

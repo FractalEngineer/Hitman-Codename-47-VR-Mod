@@ -353,11 +353,27 @@ DrawArraysFn g_real_draw_arrays = nullptr;
 int g_arg_logs = 0;
 bool g_frustum_reported = false;
 
+// Defined with the vertex counters below; declared here so the frustum detour
+// can use it too. Each caller keeps its own budget, or the vertex path - which
+// runs thousands of times a frame - spends the whole allowance before the
+// frustum call ever happens.
+int StackSamplingEnabled(int& samples);
+void DumpStack(const char* why, int index);
+extern int g_stack_samples;
+extern int g_frustum_samples;
+
 void WINAPI DetourFrustum(double left, double right, double bottom, double top,
                           double zNear, double zFar) {
     ++g_counts[kFrustum];
     // glFrustum always builds a perspective, so this is a 3D pass.
     g_perspective = true;
+    // The function that builds the world projection every frame is engine code
+    // that has the camera in hand, and glFrustum runs only about twice a frame -
+    // so a stack here is clean, unlike one taken at a vertex call.
+    const int sample = StackSamplingEnabled(g_frustum_samples);
+    if (sample >= 0) {
+        DumpStack("glFrustum", sample);
+    }
     if (g_arg_logs < 8) {
         ++g_arg_logs;
         H47VR_LOG_INFO("glFrustum #%d l=%.4f r=%.4f b=%.4f t=%.4f near=%.4f far=%.4f",
@@ -491,25 +507,30 @@ int g_vertex_samples = 0;
 // exactly the way the level-start function was found.
 std::wstring g_stack_path;
 unsigned int g_stack_ticks = 0;
-int g_stack_samples = 0;
+int g_stack_samples = 0;    // taken at glVertex3fv
+int g_frustum_samples = 0;  // taken at glFrustum
 
-bool StackSamplingEnabled() {
-    if (g_stack_samples >= 4) {
-        return false;
+// Returns a sample index to record, or -1 when this call should not sample.
+// The tick counter is shared so the file is not stat'ed on every call.
+int StackSamplingEnabled(int& samples) {
+    if (samples >= 3) {
+        return -1;
     }
-    if ((++g_stack_ticks & 0x3FF) != 0) {
-        return false;
+    if ((++g_stack_ticks & 0x1FF) != 0) {
+        return -1;
     }
-    return ::GetFileAttributesW(g_stack_path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (::GetFileAttributesW(g_stack_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return -1;
+    }
+    return samples++;
 }
 
-void DumpStack(const char* why) {
-    ++g_stack_samples;
+void DumpStack(const char* why, int index) {
     // The return address of this call sits in the engine, and the frames above
     // it are the engine's own. Reading upward through the stack is safe: it is
     // this thread's stack and the window is small.
     void** frame = reinterpret_cast<void**>(_AddressOfReturnAddress());
-    H47VR_LOG_INFO("stack sample %d (%s):", g_stack_samples, why);
+    H47VR_LOG_INFO("stack sample %d (%s):", index, why);
 
     int printed = 0;
     for (int i = 0; i < 220 && printed < 40; ++i) {
@@ -544,8 +565,9 @@ void WINAPI DetourVertex3fv(const float* vertex) {
         H47VR_LOG_INFO("glVertex3fv #%lu %.3f, %.3f, %.3f",
                        count, vertex[0], vertex[1], vertex[2]);
     }
-    if (StackSamplingEnabled()) {
-        DumpStack("glVertex3fv");
+    const int sample = StackSamplingEnabled(g_stack_samples);
+    if (sample >= 0) {
+        DumpStack("glVertex3fv", sample);
     }
     float transformed[3];
     if (vertex != nullptr &&

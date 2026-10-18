@@ -87,20 +87,25 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       That is the reason the synthetic ESC bursts never skipped the intro: the keys had nowhere to
       land. The user presses ESC, and the user is the only reliable observer of the picture; all
       verification from the tooling side has to be numeric
-- [~] Open risk, now better understood: three launches have presented frames and then gone idle -
-      all 30 threads waiting on `UserRequest`, no dialog, CPU frozen. Once 3.5 s after launch,
-      twice after a level push while the level was already drawing millions of vertices. The last
-      one came back on its own with the picture still rendering, so this is a *stall on an
-      in-engine scene waiting to be advanced*, not a crash, and ESC is the way out - which is
-      consistent with the intro needing a human ESC in the first place. The logger has no
-      cross-thread cycle. The remedy for a test loop is a timeout-and-ESC, or a scene without an
-      opening cutscene
-- [x] The engine's camera object located, 2026-10-19, from a stack scan at `glVertex3fv`: in
-      `FUN_0fd53c50` (`HitmanDlc.dlc` RVA `0x93C50`) a vertex is turned into eye space as
-      `eye = R * (world - camPos)`, where `R` is a 3x3 reached through `param_5[1]` and `camPos`
-      is the three floats at `param_5[2..4]`. That object is what has to be driven for the
-      engine's own frustum culling to follow the view - the injected vertex rotation cannot,
-      which is why a large injected yaw shows the scene with pieces missing
+- [x] **Solved, 2026-10-19: the game pauses when its window is not active.** The user reported
+      that it stops running when the window is not focused while audio keeps playing, and that is
+      what every one of the "stalls" was: the tooling shell taking focus, the engine quietly
+      stopping presentation, all threads parked on `UserRequest` with no CPU, and the log going
+      quiet until something activated the window again. It was never a crash, a deadlock, a
+      camera problem or a video problem. `src/core/src/window_keepalive.cpp` now subclasses the
+      engine's window on a worker thread and swallows the deactivation messages
+      (`WM_ACTIVATE`/`WM_ACTIVATEAPP`/`WM_NCACTIVATE`/`WM_KILLFOCUS`), so the engine believes it
+      is still active. Verified: 600 frames drawn while another window held focus, and a level
+      push then ran 65 s untouched
+- [x] **Correction, 2026-10-19: the "camera object" was not the camera.** Live capture at
+      `HitmanDlc.dlc` RVA `0x93C50` shows its last argument is a different pointer on every call
+      (eight distinct values inside the first thirteen calls), and the object it points at holds
+      `[[0,0,1],[0,1,0],[1,0,0]]` - a coordinate-convention swap, not a view. The `(float)`
+      conversions in that decompilation are int-to-float on *integer* origins. `FUN_0fd53c50` is
+      the per-object quantized-vertex path: subtract an integer origin, rotate into the object's
+      frame, quantize with `__ftol`, pack. The earlier "camera located" claim came from a crude
+      stack scan, which finds stale code addresses as readily as return addresses, and it was
+      wrong
 - [ ] Reach gameplay automatically: `objectDrawA > 0` after the console driver submits
       `startscene C0_1` (blocker for the Milestone 1 gate)
 - [x] **Gameplay reached, 2026-10-19.** The training mission loaded with a controllable

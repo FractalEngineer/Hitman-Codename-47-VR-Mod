@@ -11,6 +11,7 @@
 #include "h47vr/scene_probe.hpp"
 #include "h47vr/symbols.hpp"
 #include "h47vr/version.hpp"
+#include "h47vr/window_keepalive.hpp"
 
 #include <windows.h>
 
@@ -206,6 +207,10 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
         RendererProbeReport(frame);
         GlProbeReport(frame);
         CameraProbeReport(frame);
+        if (WindowKeepaliveSwallowed() != 0) {
+            H47VR_LOG_INFO("frame %lu window keepalive: %lu deactivation message(s) swallowed",
+                           frame, WindowKeepaliveSwallowed());
+        }
     }
     return g_real_swap_buffers(device);
 }
@@ -352,6 +357,10 @@ bool Initialize(const char* trigger) {
     LogSymbolProbes();
 
     HooksInitialize();
+    // The engine stops drawing the moment it loses activation, which is what
+    // made every automated run look like it had wedged. Start this before the
+    // window exists so it wins the race to subclass it.
+    WindowKeepaliveStart();
     InstallRendererHooks();
     InstallConsoleCapture();
     // The GL seam has to be in place before the renderer draws, so it is

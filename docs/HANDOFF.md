@@ -38,9 +38,19 @@ the cutscene, then drive the camera.
 **The intro and the level openings are in-engine rendered scenes, not video.**
 The user confirmed this, and it explains two things that looked unrelated: an
 injected view rotation visibly wrecks the openings, and the engine can sit in one
-indefinitely (all threads idle, no CPU) until ESC advances it. Three launches
-have gone idle that way, one of them 3.5 s after launch with no level involved.
-Treat "log stops growing" as "an opening is waiting for ESC", not as a crash.
+indefinitely (all threads idle, no CPU) until ESC advances it.
+
+**The game pauses when its window is not active - and that was every "stall".**
+The user reported it directly: audio keeps playing, nothing draws, and it comes
+back when the window is activated. All the launches that went quiet did so
+because the tooling shell took focus. It was never a deadlock, a crash, a camera
+problem or a video problem. `src/core/src/window_keepalive.cpp` subclasses the
+engine's window and swallows
+`WM_ACTIVATE`/`WM_ACTIVATEAPP`/`WM_NCACTIVATE`/`WM_KILLFOCUS`, so the engine
+believes it is still active and keeps rendering in the background. Verified: 600
+frames drawn while another window held focus, then a level push that ran 65 s
+untouched. If the game ever behaves strangely around focus or the mouse, this is
+the first thing to turn off.
 
 **The camera is now driven from the mod.** The engine transforms its own
 geometry, so the view cannot be moved through the GL matrix pipeline; it is
@@ -85,7 +95,7 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
 | `h47vr-glmatrix.txt` | while the file exists, log every changed `glLoadMatrixf` matrix |
 | `h47vr-stack.txt` | dump a few stacks at `glVertex3fv`, to re-find the engine's transform |
-| `h47vr-camobj.txt` | dump the engine's camera object fields, via the `0x93C50` hook |
+| `h47vr-camobj.txt` | dump whatever the `0x93C50` hook has captured (periodic) |
 
 Two things the injected rotation cannot do, both worth remembering:
 
@@ -149,6 +159,11 @@ Two things the injected rotation cannot do, both worth remembering:
   through an orthographic projection and are left untouched. About 2,900
   vertices per frame, ~4.2M transformed in one run, and it turns on and off from
   a file with no relaunch.
+- **Background rendering.** The engine's window is subclassed and its
+  deactivation messages are swallowed, so the game keeps drawing while the
+  desktop is used for something else. Without this, every automated run stops the
+  moment the shell takes focus, which is what made the project look like it had a
+  deadlock for a long time.
 - **Console/config dispatcher reached in-process.** `System.dll` RVA `0xE590`
   is `__thiscall(object, name, arg)` with `ret 8`, verified from the machine code
   at its call site (RVA `0x104AD`) and its prologue. It splits a line at the
@@ -221,28 +236,35 @@ which is the shape everything in Milestone 2 has to fit into:
 | `glPushMatrix` / `glPopMatrix` / `glMultMatrixf` / `glRotatef` / `glScalef` | 0 | never used |
 | `glVertexPointer` / `glDrawElements` / `glDrawArrays` | 0 | no vertex arrays |
 
-`src/core/src/camera_probe.cpp` hooks the same function (`0x93C50`) to keep a
-live pointer to the camera object: it reads the last stack argument, verifies it
-points at committed memory, and remembers it. `h47vr-camobj.txt` makes the frame
-report dump the object's raw words, the same words as floats, and the 3x3 view
-rotation behind field `+4`. That pointer is the handle for driving the engine's
-camera, which is the only way to rotate the view without the culling fighting it.
+`src/core/src/camera_probe.cpp` hooks `0x93C50` and captures its last stack
+argument, verifying it points at committed memory before keeping it, and logs
+each *distinct* value it sees. That distinct-value log is what disproved the
+camera reading above, so it earns its keep as a general way to interrogate a
+suspected pointer: if a candidate is really one object it repeats, and if it is
+per-object it does not. `h47vr-camobj.txt` dumps the captured object's raw words,
+the same words as floats, and the 3x3 behind field `+4`.
 
-The engine's own camera, found by scanning the stack at `glVertex3fv` and then
-decompiling the frames (see `tools/_ghidra_out/HitmanDlc.dlc.at.FUN_0fd53c50.c`):
+**Still missing: the engine's world-to-eye transform.** The vertices reaching
+`glVertex3fv` are eye-space and inside the frustum, so something transforms them
+on the CPU before submission and culls against its own frustum first. That is the
+function to find, and it is the same wall Milestone 2 keeps hitting: without it
+the view cannot be rotated without the culling cutting the scene away.
 
-```c
-/* FUN_0fd53c50 @ HitmanDlc.dlc rva 0x93C50, __thiscall(int*,int*,uint*,int,int*) */
-d = worldVertex - param_5[2..4];          /* camera world position, three floats */
-eye = d * *(float**)param_5[1];           /* 3x3 view rotation at param_5[1]     */
-```
+**`FUN_0fd53c50` (RVA `0x93C50`) is not the camera, and is not on the world-to-eye
+path.** It was misread as one. Live capture of its last argument gives a
+different pointer on every call - eight distinct values inside the first
+thirteen - and the object behind it holds `[[0,0,1],[0,1,0],[1,0,0]]`, a
+coordinate-convention swap rather than a view. The `(float)` casts in its
+decompilation are int-to-float on *integer* origins, not float bit patterns. It
+is the per-object quantized-vertex path: subtract an integer origin, rotate into
+the object's frame, `__ftol`, pack.
 
-so `param_5` is the camera object: rotation reached through `[1]`, position at
-`[2..4]`. This is the object to drive if the engine's frustum culling has to
-follow the view. Stack RVAs that lead there, in case the chain moves:
-`HitmanDlc.dlc` `+0x93C16`, `+0x93EA0`, `+0x95EE5`, `+0x96884`, `+0x1BB873`, and
-`RenderOpenGL.dll` `+0x008A78` (the direct caller of `glVertex3fv`),
-`+0x004483`, `+0x0289F5`, `+0x02902B`, `+0x02E2E6`, `+0x02F300`.
+The RVAs from that stack scan (`HitmanDlc.dlc` `+0x93C16`, `+0x93EA0`,
+`+0x95EE5`, `+0x96884`, `+0x1BB873`; `RenderOpenGL.dll` `+0x008A78`,
+`+0x004483`, `+0x0289F5`, `+0x02902B`, `+0x02E2E6`, `+0x02F300`) are therefore
+hints at best - a crude stack scan finds stale code addresses just as readily as
+return addresses. `camera_probe.cpp` remains useful, but as a pointer-capture
+mechanism, not as a camera finder.
 
 ## Dead ends - do not revisit
 

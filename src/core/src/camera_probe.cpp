@@ -14,11 +14,23 @@
 #include <string>
 
 namespace h47vr {
+
+// Defined below, outside the anonymous namespace, so the detour observer can
+// reach it by a plain name.
+void DumpCamera(void* camera, const char* why);
+
 namespace {
 
 // `FUN_0fd53c50`: eye = R * (world - camPos), with the camera as the last stack
 // argument.
 constexpr unsigned long kCameraTransformRva = 0x00093C50;
+
+// Next lead, not yet hooked: `FUN_0fd56120` is ZCAMERA.cpp's CamUpdate. It is
+// the engine frame on the stack when the world projection is set up (found by
+// sampling at `glFrustum`, HitmanDlc.dlc +0x964A3), it logs the string
+// "CamUpdate", and it calls the camera's own virtuals - so its first argument is
+// the camera object this project has been looking for.
+constexpr unsigned long kCameraUpdateRva = 0x00096120;
 
 extern "C" void* h47vr_camera_trampoline = nullptr;
 extern "C" void* h47vr_camera_args_target = nullptr;
@@ -26,6 +38,14 @@ extern "C" void* h47vr_camera_args_target = nullptr;
 std::atomic<void*> g_camera{nullptr};
 std::atomic<unsigned long> g_calls{0};
 std::wstring g_gate;
+
+// Distinct camera pointers seen so far, so a per-object argument cannot be
+// mistaken for the camera: if this is really the camera it is the same pointer
+// every time.
+constexpr int kMaxDistinct = 8;
+void* g_distinct[kMaxDistinct] = {};
+int g_distinct_count = 0;
+bool g_dumped = false;
 
 // Entry layout: [esp] = return address, ECX = this, stack arguments from
 // [esp+4]. The thunk preserves every register and tail-jumps to the original
@@ -81,13 +101,33 @@ void ObserveCameraTransform(void* a1, void* a2, void* a3, void* a4) {
     // The camera is the last argument. It is only accepted when it actually
     // points at something readable, so a convention surprise cannot leave a
     // wild pointer behind for the report to dereference.
-    if (Readable(a4, 0x20)) {
+    if (a4 != nullptr && Readable(a4, 0x20)) {
         g_camera = a4;
+        bool known = false;
+        for (int i = 0; i < g_distinct_count; ++i) {
+            if (g_distinct[i] == a4) {
+                known = true;
+                break;
+            }
+        }
+        if (!known && g_distinct_count < kMaxDistinct) {
+            g_distinct[g_distinct_count++] = a4;
+            H47VR_LOG_INFO("camera transform: new last-argument pointer %p (call %lu)",
+                           a4, call);
+        }
     }
 
     if (call <= 6) {
         H47VR_LOG_INFO("camera transform #%lu args: %p %p %p %p",
                        call, a1, a2, a3, a4);
+    }
+
+    // Dump as soon as a camera exists, rather than waiting for a frame report:
+    // an opening sequence can wedge the engine with no frames at all, and the
+    // whole point is to know the layout before that happens.
+    if (!g_dumped && g_camera.load() != nullptr) {
+        g_dumped = true;
+        DumpCamera(g_camera.load(), "first sighting");
     }
 }
 
@@ -123,20 +163,15 @@ bool CameraProbeRearm() {
     return CameraProbeInstall();
 }
 
-void CameraProbeReport(unsigned long frame) {
-    if (::GetFileAttributesW(g_gate.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        return;
-    }
-
-    void* camera = g_camera.load();
+void DumpCamera(void* camera, const char* why) {
     if (camera == nullptr) {
         H47VR_LOG_INFO("camera object: none seen yet (%lu transform calls)",
                        g_calls.load());
         return;
     }
 
-    H47VR_LOG_INFO("frame %lu camera object %p, %lu transform calls since install",
-                   frame, camera, g_calls.load());
+    H47VR_LOG_INFO("camera object %p (%s), %lu transform calls since install",
+                   camera, why, g_calls.load());
 
     // The layout the decompilation implies: a vtable, a pointer to the 3x3 view
     // rotation, then the camera position as three floats at +8, +0xc, +0x10.
@@ -160,6 +195,14 @@ void CameraProbeReport(unsigned long frame) {
     } else {
         H47VR_LOG_INFO("  field +4 (%p) is not a readable 3x3", rotation);
     }
+}
+
+void CameraProbeReport(unsigned long frame) {
+    if (::GetFileAttributesW(g_gate.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return;
+    }
+    H47VR_LOG_INFO("frame %lu camera probe report", frame);
+    DumpCamera(g_camera.load(), "periodic");
 }
 
 }  // namespace h47vr

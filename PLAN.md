@@ -40,7 +40,10 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [~] Locate camera transforms, world rendering, visibility calculation, input dispatch and weapon firing
       (camera, visibility, input and weapon located by exported name; renderer draw candidates
       identified by RVA; no semantics confirmed in a debugger yet)
-- [ ] Validate an x86 OpenXR session on the connected Quest
+- [ ] Validate an x86 OpenXR session on the connected Quest (blocked on hardware: the probe
+      reaches the runtime, which advertises `XR_KHR_opengl_enable`, but refuses `xrCreateInstance`
+      until a Virtual Desktop stream session is active - a 64-bit control fails identically, so
+      this is environmental rather than a 32-bit limitation)
 - [~] Deliver a hook map and a graphics-bridge result (hook map now carries resolved symbols and
       RVAs; graphics bridge still untested)
 

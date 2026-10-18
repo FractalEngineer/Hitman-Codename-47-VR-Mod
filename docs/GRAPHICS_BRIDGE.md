@@ -15,10 +15,67 @@ Virtual Desktop OpenXR runtime, on the connected Quest.
 ## What is not proven
 
 - Whether the runtime's OpenXR session can coexist in-process with the game's
-  legacy WGL context.
+  legacy WGL context. The probe reaches this step but the runtime will not
+  initialise yet; see below.
 - Whether eye rendering can reuse the game's GL context or needs its own.
 - Whether `SwapBuffers` interception is sufficient for presentation control, or
   whether the scene draw has to be re-entered.
+
+## First run results
+
+`src/probe/main.cpp` builds to `h47vr-openxr-probe.exe` with the vendored loader
+staged next to it, and walks the whole bridge step by step.
+
+| Step | Result |
+| --- | --- |
+| Loader loads the runtime manifest | ok - `virtualdesktop-openxr-32.json` |
+| 32-bit runtime DLL is genuinely i386 | ok - `machine 0x014c`, 81 exports |
+| `xrEnumerateInstanceExtensionProperties` | ok - 31 extensions |
+| `XR_KHR_opengl_enable` advertised | **yes** |
+| `XR_KHR_D3D11_enable` advertised | yes (fallback route is available) |
+| `xrCreateInstance` | FAILED, `XR_ERROR_INITIALIZATION_FAILED` (-4) |
+
+The failure is neither architecture-specific nor related to OpenGL:
+
+- An identical **64-bit** control build fails exactly the same way, so this is
+  not the 32-bit path.
+- The 32-bit failure persists with **zero** extensions enabled, so it is not the
+  OpenGL binding either.
+
+The runtime is refusing to create an instance at all, which is what Virtual
+Desktop's OpenXR runtime does while no stream session is active.
+
+What this settles:
+
+- The plan's largest open risk is retired. Virtual Desktop really does ship an
+  x86 OpenXR runtime, it advertises the OpenGL binding, and our loader reaches
+  it. 32-bit was never the obstacle.
+- The remaining blocker is environmental, not architectural: the Quest has to be
+  connected through Virtual Desktop. Step 7, the session over the legacy
+  context, has not executed yet.
+
+Reproduce (must run outside any sandbox so it can reach the runtime):
+
+```powershell
+./tools/build.ps1 -Target h47vr_openxr_probe
+./build/bin/probe/h47vr-openxr-probe.exe
+```
+
+### Side finding: the fingerprint gate proved itself on the wrong host
+
+The probe first ran from `build/bin`, which is also where the app-local
+`opengl32.dll` proxy is built. Windows loaded that proxy into the probe process,
+so the mod started inside a program that is not the game. The gate refused:
+
+```
+[error] unsupported build (appid 6900 buildid 251800): 11 missing, 0 mismatched.
+        No patches will be applied.
+```
+
+That is the "unknown builds receive a clear compatibility message" acceptance
+test demonstrating itself on an unintended host, which is a better proof than a
+deliberate test would have been. The probe now builds into `build/bin/probe` so
+it exercises the system OpenGL path like a clean pre-installation run.
 
 ## Runtime facts
 

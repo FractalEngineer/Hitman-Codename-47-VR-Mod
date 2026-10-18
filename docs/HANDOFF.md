@@ -77,6 +77,18 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
 | `h47vr-glmatrix.txt` | while the file exists, log every changed `glLoadMatrixf` matrix |
+| `h47vr-stack.txt` | dump a few stacks at `glVertex3fv`, to re-find the engine's transform |
+
+Two things the injected rotation cannot do, both worth remembering:
+
+- **It cannot defeat the engine's culling.** The engine culls against the
+  frustum of the camera it believes it has, so a large injected yaw shows the
+  scene with pieces missing. Small offsets - what a head pose actually is - are
+  fine; free look needs the engine's own camera driven instead.
+- **`yaw` and `pitch` compose as `Rx(pitch) * Ry(yaw)`**, built from explicit
+  rotation matrices in row-major storage and applied row by row. The first
+  version stored a column-major rotation but applied it row by row, which stays
+  orthonormal - so it never looks broken, only subtly wrong.
 
 ## Environment
 
@@ -200,6 +212,22 @@ which is the shape everything in Milestone 2 has to fit into:
 | `glLoadMatrixf` | ~2.9 | 1 modelview (identity), 2 others (projection, texture) |
 | `glPushMatrix` / `glPopMatrix` / `glMultMatrixf` / `glRotatef` / `glScalef` | 0 | never used |
 | `glVertexPointer` / `glDrawElements` / `glDrawArrays` | 0 | no vertex arrays |
+
+The engine's own camera, found by scanning the stack at `glVertex3fv` and then
+decompiling the frames (see `tools/_ghidra_out/HitmanDlc.dlc.at.FUN_0fd53c50.c`):
+
+```c
+/* FUN_0fd53c50 @ HitmanDlc.dlc rva 0x93C50, __thiscall(int*,int*,uint*,int,int*) */
+d = worldVertex - param_5[2..4];          /* camera world position, three floats */
+eye = d * *(float**)param_5[1];           /* 3x3 view rotation at param_5[1]     */
+```
+
+so `param_5` is the camera object: rotation reached through `[1]`, position at
+`[2..4]`. This is the object to drive if the engine's frustum culling has to
+follow the view. Stack RVAs that lead there, in case the chain moves:
+`HitmanDlc.dlc` `+0x93C16`, `+0x93EA0`, `+0x95EE5`, `+0x96884`, `+0x1BB873`, and
+`RenderOpenGL.dll` `+0x008A78` (the direct caller of `glVertex3fv`),
+`+0x004483`, `+0x0289F5`, `+0x02902B`, `+0x02E2E6`, `+0x02F300`.
 
 ## Dead ends - do not revisit
 

@@ -87,11 +87,20 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       That is the reason the synthetic ESC bursts never skipped the intro: the keys had nowhere to
       land. The user presses ESC, and the user is the only reliable observer of the picture; all
       verification from the tooling side has to be numeric
-- [~] Open risk: one launch (the first one carrying the GL probe) presented five frames and then
-      went idle - all 30 threads waiting on `UserRequest`, no dialog, CPU frozen - and never
-      recovered. It has not reproduced in six later launches, two of them with the identical full
-      interception set, so it is recorded as an unexplained one-off rather than a proven
-      regression. It looks the same as the intro stalls the user hit repeatedly by hand
+- [~] Open risk: twice now a launch has presented frames and then gone idle for good - all 30
+      threads waiting on `UserRequest`, no dialog, CPU frozen, no recovery. Once 3.5 s after
+      launch, during the intro videos; once 32 s in, just after a level push, while the level was
+      already drawing 5.3M vertices. Eight other launches, including several with the identical
+      interception set, were fine. The logger has no cross-thread cycle, so this is not obviously
+      ours, and it looks exactly like the intro stalls the user has hit repeatedly by hand. Treat
+      it as environment flakiness with a retry, and note that the first stall happened before any
+      level push
+- [x] The engine's camera object located, 2026-10-19, from a stack scan at `glVertex3fv`: in
+      `FUN_0fd53c50` (`HitmanDlc.dlc` RVA `0x93C50`) a vertex is turned into eye space as
+      `eye = R * (world - camPos)`, where `R` is a 3x3 reached through `param_5[1]` and `camPos`
+      is the three floats at `param_5[2..4]`. That object is what has to be driven for the
+      engine's own frustum culling to follow the view - the injected vertex rotation cannot,
+      which is why a large injected yaw shows the scene with pieces missing
 - [ ] Reach gameplay automatically: `objectDrawA > 0` after the console driver submits
       `startscene C0_1` (blocker for the Milestone 1 gate)
 - [x] **Gameplay reached, 2026-10-19.** The training mission loaded with a controllable

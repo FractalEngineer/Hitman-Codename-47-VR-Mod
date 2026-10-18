@@ -3,9 +3,12 @@
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
 #include "h47vr/paths.hpp"
+#include "h47vr/symbols.hpp"
 #include "proxy_slots.h"
 
 #include <windows.h>
+
+#include <intrin.h>
 
 #include <atomic>
 #include <cmath>
@@ -128,25 +131,39 @@ std::wstring g_camera_path;
 std::atomic<bool> g_perspective{false};
 std::atomic<bool> g_camera_active{false};
 std::atomic<unsigned long> g_transformed_vertices{0};
-float g_camera_matrix[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+// Row-major on purpose. The first version stored this in GL's column-major
+// order while the consumer applied it row by row, which is a rotation whose yaw
+// is right and whose pitch mixes into the wrong axis - and quietly stays a
+// rotation, so it never looks obviously broken. Row-major storage with an
+// explicit multiply removes the trap.
+float g_camera_matrix[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+float g_camera_yaw = 0.0f;
+float g_camera_pitch = 0.0f;
 unsigned int g_camera_ticks = 0;
 
-// A 3x3 rotation, applied to eye-space vertices. Column-major, matching GL.
+// Rotation applied to eye-space vertices: a yaw about Y, then a pitch about the
+// already-yawed X axis. Because the vertices are the scene, the head turning one
+// way is the scene turning the other, so this is the inverse of the head pose -
+// which is exactly what a view matrix is.
 void ShapeCameraMatrix(float yawDegrees, float pitchDegrees) {
     const float yaw = yawDegrees * 3.14159265358979f / 180.0f;
     const float pitch = pitchDegrees * 3.14159265358979f / 180.0f;
     const float cy = std::cos(yaw), sy = std::sin(yaw);
     const float cp = std::cos(pitch), sp = std::sin(pitch);
-    // R = Ry * Rx, written straight into column-major order.
-    g_camera_matrix[0] = cy;
-    g_camera_matrix[1] = sy * sp;
-    g_camera_matrix[2] = -sy * cp;
-    g_camera_matrix[3] = 0.0f;
-    g_camera_matrix[4] = cp;
-    g_camera_matrix[5] = sp;
-    g_camera_matrix[6] = sy;
-    g_camera_matrix[7] = -cy * sp;
-    g_camera_matrix[8] = cy * cp;
+
+    // yaw about Y, pitch about X, both in the scene's frame.
+    const float yawM[3][3] = {{cy, 0.0f, sy}, {0.0f, 1.0f, 0.0f}, {-sy, 0.0f, cy}};
+    const float pitchM[3][3] = {{1.0f, 0.0f, 0.0f}, {0.0f, cp, -sp}, {0.0f, sp, cp}};
+
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            float sum = 0.0f;
+            for (int k = 0; k < 3; ++k) {
+                sum += pitchM[row][k] * yawM[k][column];
+            }
+            g_camera_matrix[row][column] = sum;
+        }
+    }
 }
 
 // "yaw=<degrees> pitch=<degrees>" on one line. Any parse failure leaves the
@@ -183,9 +200,17 @@ void RefreshCamera() {
     if (pitchAt != nullptr) {
         pitch = static_cast<float>(std::atof(pitchAt + 6));
     }
-    ShapeCameraMatrix(yaw, pitch);
-    if (!g_camera_active.exchange(true)) {
+    const bool wasActive = g_camera_active.exchange(true);
+    if (!wasActive || yaw != g_camera_yaw || pitch != g_camera_pitch) {
+        g_camera_yaw = yaw;
+        g_camera_pitch = pitch;
+        ShapeCameraMatrix(yaw, pitch);
         H47VR_LOG_INFO("gl camera: on (yaw=%.2f pitch=%.2f)", yaw, pitch);
+        H47VR_LOG_INFO("  scene rotation | %7.4f %7.4f %7.4f | %7.4f %7.4f %7.4f "
+                       "| %7.4f %7.4f %7.4f",
+                       g_camera_matrix[0][0], g_camera_matrix[0][1], g_camera_matrix[0][2],
+                       g_camera_matrix[1][0], g_camera_matrix[1][1], g_camera_matrix[1][2],
+                       g_camera_matrix[2][0], g_camera_matrix[2][1], g_camera_matrix[2][2]);
     }
 }
 
@@ -198,9 +223,9 @@ bool CameraTransform(float x, float y, float z, float out[3]) {
     if (!g_camera_active.load() || !g_perspective.load()) {
         return false;
     }
-    out[0] = g_camera_matrix[0] * x + g_camera_matrix[3] * y + g_camera_matrix[6] * z;
-    out[1] = g_camera_matrix[1] * x + g_camera_matrix[4] * y + g_camera_matrix[7] * z;
-    out[2] = g_camera_matrix[2] * x + g_camera_matrix[5] * y + g_camera_matrix[8] * z;
+    out[0] = g_camera_matrix[0][0] * x + g_camera_matrix[0][1] * y + g_camera_matrix[0][2] * z;
+    out[1] = g_camera_matrix[1][0] * x + g_camera_matrix[1][1] * y + g_camera_matrix[1][2] * z;
+    out[2] = g_camera_matrix[2][0] * x + g_camera_matrix[2][1] * y + g_camera_matrix[2][2] * z;
     ++g_transformed_vertices;
     return true;
 }
@@ -458,6 +483,51 @@ void WINAPI DetourTranslated(double x, double y, double z) {
 // then that is the only place an injected view can go.
 int g_vertex_samples = 0;
 
+// Rotating vertices at the proxy works, but it cannot be the whole answer: the
+// engine has already culled against the frustum of the camera it thinks it has,
+// so a large injected rotation shows a scene with holes in it. Driving the
+// engine's own camera is the real fix, and its transform function is the frame
+// that handed us these vertices. A stack scan at the vertex call finds it, in
+// exactly the way the level-start function was found.
+std::wstring g_stack_path;
+unsigned int g_stack_ticks = 0;
+int g_stack_samples = 0;
+
+bool StackSamplingEnabled() {
+    if (g_stack_samples >= 4) {
+        return false;
+    }
+    if ((++g_stack_ticks & 0x3FF) != 0) {
+        return false;
+    }
+    return ::GetFileAttributesW(g_stack_path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+void DumpStack(const char* why) {
+    ++g_stack_samples;
+    // The return address of this call sits in the engine, and the frames above
+    // it are the engine's own. Reading upward through the stack is safe: it is
+    // this thread's stack and the window is small.
+    void** frame = reinterpret_cast<void**>(_AddressOfReturnAddress());
+    H47VR_LOG_INFO("stack sample %d (%s):", g_stack_samples, why);
+
+    int printed = 0;
+    for (int i = 0; i < 220 && printed < 40; ++i) {
+        const void* value = frame[i];
+        if (value == nullptr) {
+            continue;
+        }
+        unsigned long long offset = 0;
+        if (ModuleOffset(value, L"HitmanDlc.dlc", offset)) {
+            H47VR_LOG_INFO("   [%3d] %p  HitmanDlc.dlc +0x%06llX", i, value, offset);
+            ++printed;
+        } else if (ModuleOffset(value, L"RenderOpenGL.dll", offset)) {
+            H47VR_LOG_INFO("   [%3d] %p  RenderOpenGL.dll +0x%06llX", i, value, offset);
+            ++printed;
+        }
+    }
+}
+
 void WINAPI DetourBegin(unsigned int mode) {
     ++g_counts[kBegin];
     g_real_begin(mode);
@@ -473,6 +543,9 @@ void WINAPI DetourVertex3fv(const float* vertex) {
     if (vertex != nullptr && (count <= 3 || count % 200000 == 0)) {
         H47VR_LOG_INFO("glVertex3fv #%lu %.3f, %.3f, %.3f",
                        count, vertex[0], vertex[1], vertex[2]);
+    }
+    if (StackSamplingEnabled()) {
+        DumpStack("glVertex3fv");
     }
     float transformed[3];
     if (vertex != nullptr &&
@@ -590,6 +663,7 @@ bool InstallImpl(const char* filter) {
 
     g_gate_path = JoinPath(mod::GameDirectory(), L"h47vr-glmatrix.txt");
     g_camera_path = JoinPath(mod::GameDirectory(), L"h47vr-cam.txt");
+    g_stack_path = JoinPath(mod::GameDirectory(), L"h47vr-stack.txt");
 
     const Intercept intercepts[] = {
         {"glFrustum", reinterpret_cast<void*>(&DetourFrustum),

@@ -21,6 +21,11 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] Install and uninstall that preserve the commercial copy, verified by re-running the pins
 - [x] One-command development iteration (`tools/iterate.ps1`)
 - [x] Standalone injectable module (`h47vr_mod.dll`) plus launcher `verify` / `run` / `inject`
+- [x] Ghidra headless pipeline plus shared PE tooling (`tools/ghidra-analyze.ps1`, `tools/peutils.py`)
+- [x] Hook targets resolved by exported name, confirmed live for `Globals.dll` and
+      `System.dll` (`g_pSysInput` at RVA `0x3014`, `RunEngine` at `0xA790`)
+- [ ] Deferred hook installation on module load (`LdrRegisterDllNotification`), required
+      because `HitmanDlc.dlc` is not loaded when the proxy starts
 - [ ] Vendor or build the 32-bit `openxr_loader` (nothing suitable exists on this machine)
 - [ ] Install x32dbg for live address and calling-convention validation
 - [ ] Vendor MinHook
@@ -31,9 +36,12 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] Work in a separate development copy, preserving the Steam installation
 - [x] Verify normal gameplay in both renderers (Direct3D and OpenGL both run)
 - [~] Isolate the widescreen plugin's effects (loaded and pinned; behaviour unmeasured)
-- [ ] Locate camera transforms, world rendering, visibility calculation, input dispatch and weapon firing
+- [~] Locate camera transforms, world rendering, visibility calculation, input dispatch and weapon firing
+      (camera, visibility, input and weapon located by exported name; renderer draw candidates
+      identified by RVA; no semantics confirmed in a debugger yet)
 - [ ] Validate an x86 OpenXR session on the connected Quest
-- [~] Deliver a hook map and a graphics-bridge result (documents written, no address validated yet)
+- [~] Deliver a hook map and a graphics-bridge result (hook map now carries resolved symbols and
+      RVAs; graphics bridge still untested)
 
 Gate: not yet met. A controllable camera and a workable VR graphics path are both
 still unproven, so interaction work stays blocked.
@@ -80,7 +88,9 @@ Gate: positional parallax, stable world scale, unchanged simulation speed in tra
       launch performed by the Steam client, so testing happens in the game directory
 - [x] Presentation identified: `SwapBuffers` comes from `gdi32`, not `opengl32`
 - [ ] Widescreen plugin's effect on the OpenGL path measured
-- [ ] Ghidra pass over the binaries
+- [x] Ghidra pass over the binaries (`HitmanDlc.dlc`, `System.dll`, `Globals.dll`,
+      `EngineData.dll`, `RenderOpenGL.dll` analysed; 190 anchors and 1927 references
+      in the gameplay module)
 
 ## Recommendation and Feasibility
 

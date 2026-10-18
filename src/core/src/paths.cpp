@@ -52,6 +52,11 @@ std::wstring JoinPath(const std::wstring& base, const std::wstring& leaf) {
     return base + L"\\" + leaf;
 }
 
+std::wstring FileName(const std::wstring& path) {
+    const std::size_t slash = path.find_last_of(L"\\/");
+    return slash == std::wstring::npos ? path : path.substr(slash + 1);
+}
+
 bool FileExists(const std::wstring& path) {
     const DWORD attributes = ::GetFileAttributesW(path.c_str());
     return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);

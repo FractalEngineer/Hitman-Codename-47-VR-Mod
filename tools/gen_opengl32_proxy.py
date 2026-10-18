@@ -19,102 +19,10 @@ so a build tree is never touched by a no-op regeneration.
 """
 
 import argparse
-import struct
 import sys
 from pathlib import Path
 
-
-class PE:
-    def __init__(self, data: bytes):
-        self.data = data
-        if data[:2] != b"MZ":
-            raise ValueError("not a PE file (missing MZ)")
-        self.pe_off = struct.unpack_from("<I", data, 0x3C)[0]
-        if data[self.pe_off:self.pe_off + 4] != b"PE\0\0":
-            raise ValueError("not a PE file (missing PE signature)")
-
-        coff = self.pe_off + 4
-        self.machine, self.num_sections = struct.unpack_from("<HH", data, coff)
-        size_opt = struct.unpack_from("<H", data, coff + 16)[0]
-        self.opt_off = coff + 20
-
-        magic = struct.unpack_from("<H", data, self.opt_off)[0]
-        if magic == 0x10B:
-            self.is_pe32 = True
-            dir_off = self.opt_off + 96
-        elif magic == 0x20B:
-            self.is_pe32 = False
-            dir_off = self.opt_off + 112
-        else:
-            raise ValueError(f"unknown optional header magic 0x{magic:x}")
-        self.data_dirs = dir_off
-
-        sec_off = self.opt_off + size_opt
-        self.sections = []
-        for i in range(self.num_sections):
-            base = sec_off + i * 40
-            name = data[base:base + 8].rstrip(b"\0").decode("ascii", "replace")
-            vsize, vaddr, rsize, raddr = struct.unpack_from("<IIII", data, base + 8)
-            self.sections.append((name, vaddr, vsize, raddr, rsize))
-
-    def rva_to_off(self, rva: int) -> int:
-        for _name, vaddr, vsize, raddr, rsize in self.sections:
-            span = max(vsize, rsize)
-            if vaddr <= rva < vaddr + span:
-                return raddr + (rva - vaddr)
-        raise ValueError(f"rva 0x{rva:x} is not inside any section")
-
-    def cstr(self, rva: int) -> str:
-        off = self.rva_to_off(rva)
-        end = self.data.index(b"\0", off)
-        return self.data[off:end].decode("ascii", "replace")
-
-    def data_dir(self, index: int):
-        off = self.data_dirs + index * 8
-        return struct.unpack_from("<II", self.data, off)
-
-    def imports(self):
-        """Yield (dll_name_lower, [name or ordinal, ...])."""
-        rva, _size = self.data_dir(1)  # IMAGE_DIRECTORY_ENTRY_IMPORT
-        if rva == 0:
-            return
-        off = self.rva_to_off(rva)
-        stride_entry = 4 if self.is_pe32 else 8
-        high = 1 << (31 if self.is_pe32 else 63)
-        while True:
-            ilt, _ts, _fc, name_rva, _ft = struct.unpack_from("<IIIII", self.data, off)
-            if ilt == 0 and name_rva == 0:
-                return
-            if ilt == 0:
-                off += 20
-                continue
-            dll = self.cstr(name_rva).lower()
-            entries = []
-            cur = self.rva_to_off(ilt)
-            while True:
-                if self.is_pe32:
-                    value, = struct.unpack_from("<I", self.data, cur)
-                else:
-                    value, = struct.unpack_from("<Q", self.data, cur)
-                if value == 0:
-                    break
-                entries.append((value & 0xFFFF) if value & high else self.cstr(value + 2))
-                cur += stride_entry
-            yield dll, entries
-            off += 20
-
-    def exports(self):
-        rva, _size = self.data_dir(0)  # IMAGE_DIRECTORY_ENTRY_EXPORT
-        if rva == 0:
-            return []
-        off = self.rva_to_off(rva)
-        fields = struct.unpack_from("<IIHHIIIIIII", self.data, off)
-        n_names, addr_names = fields[7], fields[9]
-        names = []
-        for i in range(n_names):
-            nrva, = struct.unpack_from("<I", self.data, self.rva_to_off(addr_names) + i * 4)
-            names.append(self.cstr(nrva))
-        return names
+from peutils import PE
 
 
 CPP_HEADER = """\

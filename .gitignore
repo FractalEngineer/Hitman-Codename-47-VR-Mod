@@ -10,6 +10,8 @@
 
 # Local tool caches and logs
 /tools/_cache/
+/tools/_ghidra_out/
+/ghidra_project/
 __pycache__/
 *.pyc
 *.log

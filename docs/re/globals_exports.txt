@@ -1,0 +1,7 @@
+Globals.dll: 6 exports, image base 0x0FFF0000
+  0FFF3000  rva 00003000  ?GlobalEngineVersion@@3JA
+  0FFF3008  rva 00003008  ?g_pSysCom@@3PAVZSysCom@@A
+  0FFF300C  rva 0000300C  ?g_pSysFile@@3PAVZSysFile@@A
+  0FFF3014  rva 00003014  ?g_pSysInput@@3PAVZSysInput@@A
+  0FFF3010  rva 00003010  ?g_pSysInterface@@3PAVZSysInterface@@A
+  0FFF3004  rva 00003004  ?g_pSysMem@@3PAVZSysMem@@A

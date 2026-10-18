@@ -3,10 +3,12 @@
 #include "h47vr/fingerprint.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/paths.hpp"
+#include "h47vr/symbols.hpp"
 #include "h47vr/version.hpp"
 
 #include <windows.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <mutex>
 
@@ -37,6 +39,57 @@ void LogSystemContext() {
     const UINT length = ::GetSystemDirectoryW(windows, MAX_PATH);
     H47VR_LOG_INFO("system directory: %s",
                    Narrow(std::wstring(windows, length)).c_str());
+}
+
+struct SymbolProbe {
+    const wchar_t* module;
+    const char* symbol;
+    const char* purpose;
+};
+
+// The hook map depends on these. Resolving by name rather than by address means
+// a build whose export table changed cannot be silently mis-hooked, and the
+// build fingerprint already refuses to patch such a build.
+constexpr SymbolProbe kProbes[] = {
+    {L"Globals.dll", "?g_pSysInput@@3PAVZSysInput@@A", "input singleton"},
+    {L"System.dll", "RunEngine", "engine entry"},
+    {L"HitmanDlc.dlc", "_ZCAMERA_BaseCamera", "camera base"},
+    {L"HitmanDlc.dlc", "_ZCAMERA_MouseConCam", "gameplay camera"},
+    {L"HitmanDlc.dlc", "_ZCAMERA_MainCameraControl", "camera control"},
+    {L"HitmanDlc.dlc", "_ZCAMERA_NewFollowCam2", "follow camera"},
+    {L"HitmanDlc.dlc", "_ZLIST_SortCameraControls", "camera selection"},
+    {L"HitmanDlc.dlc", "_ZGEOM_AdoptVisibility", "visibility"},
+    {L"HitmanDlc.dlc", "_ZLIST_CheckVisible", "visibility query"},
+    {L"HitmanDlc.dlc", "_ZITEM_FireShot", "weapon fire"},
+    {L"HitmanDlc.dlc", "_ZGEOM_BasePickupTarget", "interaction target"},
+    {L"HitmanDlc.dlc", "_ZGEOM_ItemActivate", "interaction activate"},
+};
+
+void LogSymbolProbes() {
+    H47VR_LOG_INFO("resolving hook-map symbols by name:");
+    for (const SymbolProbe& probe : kProbes) {
+        const std::string moduleName = Narrow(probe.module);
+
+        HMODULE module = LoadedModule(probe.module);
+        if (module == nullptr) {
+            H47VR_LOG_WARN("  %-15s %-28s not loaded yet  (%s)",
+                           moduleName.c_str(), probe.symbol, probe.purpose);
+            continue;
+        }
+
+        void* address = ResolveSymbol(probe.module, probe.symbol);
+        if (address == nullptr) {
+            H47VR_LOG_ERROR("  %-15s %-28s MISSING         (%s)",
+                            moduleName.c_str(), probe.symbol, probe.purpose);
+            continue;
+        }
+
+        const auto offset = static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(address) -
+            reinterpret_cast<std::uintptr_t>(module));
+        H47VR_LOG_INFO("  %-15s %-28s %p  rva 0x%06llX  (%s)",
+                       moduleName.c_str(), probe.symbol, address, offset, probe.purpose);
+    }
 }
 
 }  // namespace
@@ -87,6 +140,9 @@ bool Initialize(const char* trigger) {
     }
 
     H47VR_LOG_INFO("supported build %s confirmed", report.buildId.c_str());
+
+    LogSymbolProbes();
+
     H47VR_LOG_INFO(
         "milestone 1: hook installation is not implemented yet; the mod is "
         "currently a verified loader with diagnostics only.");

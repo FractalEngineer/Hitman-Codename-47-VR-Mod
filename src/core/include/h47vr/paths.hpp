@@ -15,6 +15,9 @@ std::wstring ExecutableDirectory();
 
 std::wstring JoinPath(const std::wstring& base, const std::wstring& leaf);
 
+// Last path component, e.g. "HitmanDlc.dlc" for a full path.
+std::wstring FileName(const std::wstring& path);
+
 bool FileExists(const std::wstring& path);
 
 // Creates every missing component of a directory path.

@@ -69,6 +69,19 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       starting a level, which is why it "succeeded" and did nothing
 - [x] Direct scene-entry harness: `h47vr-go.txt` accepts `<mode>:<name>` and calls the entry
       itself, returning the engine's own result instead of a hard-coded "recognised"
+- [x] Corrected again, and this one matters: `EngineData.dll` RVA `0xEF60` is the engine's
+      **settings/command** handler (`EngineData.cpp`; it switches on `Cams`, `Hira`, `Dir`,
+      `HiraClip`, `DirClip`), and `Hitman.ini`'s `Anisotropy`/`ShadowDetail`/`TextureResolution`
+      lines go through it as `mode=1`. `startscene` (`mode=2`) returns 1 and loads nothing.
+      The whole `startscene` lead was a misreading - level loading lives in `HitmanDlc.dlc`
+- [x] Front end structure located, which is where the repeatable entry has to come from: every
+      screen is an exported wing group (`_ZWINGROUP_StateIntro`, `_ZWINGROUP_StateSelectLevel`,
+      `_ZWINGROUP_StateMain`, ...) built by descriptor functions, switched by **name** through
+      `vtbl[0x49c]("StateSelectLevel")`, and the front end's data is a name/value registry
+      reached from the world object (`vtbl[0x30]` / `vtbl[0x2c]`) holding names such as
+      `lProfileManager`, `lCurrentProfile`, `strPreScene`. The level-name table is data at
+      `HitmanDlc.dlc` `0x0FD3B6xx`, read by the profile/level-select code
+      (`FUN_0fd3be80`, `FUN_0fd3e580`)
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation

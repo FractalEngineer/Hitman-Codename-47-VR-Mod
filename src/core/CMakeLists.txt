@@ -4,6 +4,7 @@ add_library(h47vr_core STATIC
     src/fingerprint.cpp
     src/symbols.cpp
     src/hooks.cpp
+    src/renderer_probe.cpp
     src/mod.cpp)
 
 target_include_directories(h47vr_core PUBLIC include)

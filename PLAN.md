@@ -28,6 +28,9 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       `HitmanDlc.dlc` arrives, which is after the proxy starts
 - [x] First real detours in the shipping build: `gdi32!SwapBuffers` (firing, frames counted)
       and `_ZCAMERA_MouseConCam` (installed at RVA `0x0264D0`)
+- [x] Renderer map: GL import call-site analysis (`tools/ghidra/DumpReferences.java`) plus
+      in-process call-rate confirmation, which identified the frame boundary and the four
+      2D UI passes
 - [ ] Controllable camera: drive the camera from the mod and observe it move in a loaded level
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
@@ -57,8 +60,13 @@ so interaction work stays blocked until a camera hook exists.
 
 ### Milestone 2 - correct stereo rendering
 
-- [ ] Update gameplay once, then render both eyes from the same simulation state
-- [ ] Use the runtime's eye poses and asymmetric projections
+- [~] Update gameplay once, then render both eyes from the same simulation state
+      (frame boundary identified: `RenderOpenGL.dll` RVA `0x0048F0`, the only caller of
+      `SwapBuffers`; measured at ~1 call per frame. `FUN_0fb73680` is per-pass at ~17-18
+      calls per frame, so it is the wrong place for the eye loop)
+- [~] Use the runtime's eye poses and asymmetric projections (runtime side proven by the
+      probe; the renderer side is blocked: `glFrustum` is called from a code region Ghidra
+      has not defined as a function, and recovering it is the next step)
 - [ ] Apply camera changes before visibility calculation; expand visibility conservatively
 - [ ] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon events
 - [ ] Calibrate game units to metres, eye height and near clipping

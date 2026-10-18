@@ -128,31 +128,45 @@ half of the message path if the pickup route proves insufficient.
 ### Renderer candidates
 
 `RenderOpenGL.dll` exports only `Create` (RVA `0x1000`), so the renderer targets
-come from the Ghidra pass rather than from the export table. These are functions
-that reference the leaked source paths, which makes them good candidates to
-identify by disassembly next.
+come from analysis rather than the export table. Rather than guess from function
+sizes, `tools/ghidra/DumpReferences.java` follows the imported GL entry points
+and reports which internal function calls each one. That is what dated the map
+below, and `src/core/src/renderer_probe.cpp` then confirmed the rates at run
+time by counting calls with convention-agnostic detours.
 
-| Candidate | RVA | Evidence |
-| --- | --- | --- |
-| `FUN_0fb73680` | `0x00003680` | 20+ assertions from `RenderWintelOpenGLDraw.cpp`; likely the scene draw |
-| `FUN_0fb71e90` | `0x00001E90` | `RenderWintelOpenGLDraw.cpp` |
-| `FUN_0fb720b0` | `0x000020B0` | `RenderWintelOpenGLDraw.cpp` |
-| `FUN_0fb721d0` | `0x000021D0` | `RenderWintelOpenGLDraw.cpp` |
-| `FUN_0fb72ac0` | `0x00002AC0` | `RenderWintelOpenGLDraw.cpp` |
-| `FUN_0fb73210` | `0x00003210` | `RenderWintelOpenGLDraw.cpp` |
-| `FUN_0fb73290` | `0x00003290` | `RenderWintelOpenGLDraw.cpp` |
-| `FUN_0fb71de0` | `0x00001DE0` | `RenderWintelOpenGLDraw.cpp` |
-| `FUN_0fb83000` | `0x00013000` | `RenderWintelOpenGLTex.cpp` |
-| `FUN_0fb83700` | `0x00013700` | `RenderWintelOpenGLTex.cpp` |
-| `FUN_0fb84170` | `0x00014170` | `RenderWintelOpenGLTex.cpp` |
-| `FUN_0fb71060` | `0x00001060` | `RenderWintelOpenGLDLL.cpp` (module init) |
-| `FUN_0fb71220` | `0x00001220` | `RenderWintelOpenGLDLL.cpp` |
-| `FUN_0fb713d0` | `0x000013D0` | `RenderWintelOpenGLDLL.cpp` |
-| `FUN_0fb715e0` | `0x000015E0` | `RenderWintelOpenGLDLL.cpp` |
-| `FUN_0fb71720` | `0x00001720` | `RenderWintelOpenGLDLL.cpp` (exported `Create` path) |
-| `FUN_0fb95d50` | `0x00025D50` | `RenderBase.cpp` |
-| `FUN_0fb96170` | `0x00026170` | `RenderBase.cpp` |
-| `FUN_0fb97b10` | `0x00027B10` | `RenderBase.cpp` |
+| Target | RVA | Why it matters | Measured |
+| --- | --- | --- | --- |
+| `FUN_0fb748f0` | `0x0048F0` | the only caller of `SwapBuffers` | present, ~1 per frame (118 in 120) |
+| `FUN_0fb73680` | `0x003680` | `RenderWintelOpenGLDraw.cpp`, 20+ assertions | **~17-18 per frame**, so a per-pass call, not per-frame |
+| `FUN_0fb76590` | `0x006590` | per-object draw: `glPushMatrix`, `glMultMatrixf`, `glTranslatef`, `glScalef`, `glBindTexture`, `glVertexPointer`, `glDrawElements` | 0 at the front end - world geometry is dormant |
+| `FUN_0fb76270` | `0x006270` | second object path: matrix stack, `glCullFace` | 0 at the front end |
+| `FUN_0fb74930` | `0x004930` | 2D pass: `glOrtho` + `glViewport` + `glBegin`/`glEnd` | menu/UI layer |
+| `FUN_0fb75300` | `0x005300` | 2D pass, same shape | menu/UI layer |
+| `FUN_0fb75a10` | `0x005A10` | 2D pass, same shape | menu/UI layer |
+| `FUN_0fb75f20` | `0x005F20` | 2D pass, same shape | menu/UI layer |
+| `FUN_0fb72ec0` | `0x002EC0` | `glOrtho` + `glLoadIdentity`, `glEnable`/`glDisable` | another 2D/ortho setup |
+| `FUN_0fb715e0` | `0x0015E0` | texture creation: `glGenTextures`, `glTexImage2D` | called once per texture |
+| `FUN_0fb83000` | `0x013000` | texture upload, `glTexImage2D` x5 | |
+| `FUN_0fb83700` | `0x013700` | texture upload | |
+| `FUN_0fb84170` | `0x014170` | texture upload | |
+
+Two consequences for Milestone 2, both from measurement rather than inference:
+
+- The frame boundary is `FUN_0fb748f0`, not `FUN_0fb73680`. It is the one place
+  that runs once per frame and hands the frame to `SwapBuffers`, so the eye loop
+  belongs there.
+- The four `glOrtho` + `glViewport` passes are the 2D UI layers. They are the
+  passes that must **not** be duplicated per eye, which is exactly the
+  "separate world geometry from menus" requirement.
+
+One gap: `glFrustum` is referenced only from `(outside any function)`, so the
+projection setup is in a code region Ghidra has not defined as a function.
+Recovering it is required work, because asymmetric per-eye projections have to
+land there.
+
+`RenderOpenGL.dll` loaded at its preferred base `0x0FB70000` in that run, while
+`HitmanDlc.dlc` relocated. Both cases occur, which is why every address in this
+file is an RVA.
 | `FUN_0fb98530` | `0x00028530` | `RenderWintel.cpp` |
 | `FUN_0fb9b8d0` | `0x0002B8D0` | `RenderWintel.cpp` |
 

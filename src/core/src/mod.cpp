@@ -4,6 +4,7 @@
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/paths.hpp"
+#include "h47vr/renderer_probe.hpp"
 #include "h47vr/symbols.hpp"
 #include "h47vr/version.hpp"
 
@@ -104,10 +105,18 @@ std::atomic<unsigned long> g_presented_frames{0};
 
 BOOL WINAPI HookSwapBuffers(HDC device) {
     const unsigned long frame = ++g_presented_frames;
+    if (frame == 1) {
+        // Safe place to patch renderer code: it is fully loaded and running by
+        // the time the first frame is presented.
+        RendererProbeInstall();
+    }
     // First few frames, then a heartbeat: enough to prove presentation is
     // intercepted and to estimate the rate without flooding the log.
-    if (frame <= 5 || frame % 600 == 0) {
+    if (frame <= 5) {
         H47VR_LOG_INFO("presented frame %lu", frame);
+    }
+    if (frame % 120 == 0) {
+        RendererProbeReport(frame);
     }
     return g_real_swap_buffers(device);
 }

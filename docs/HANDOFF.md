@@ -11,6 +11,9 @@ as the work**.
 
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
+Everything below is committed and pushed at `7d02cd1`. The game may still be
+running from the last test, in the training level, with the camera injection
+off; it runs happily in the background now, so it is safe to leave or kill.
 
 ## Where things stand (2026-10-19)
 
@@ -52,12 +55,22 @@ frames drawn while another window held focus, then a level push that ran 65 s
 untouched. If the game ever behaves strangely around focus or the mouse, this is
 the first thing to turn off.
 
-**The camera is now driven from the mod.** The engine transforms its own
-geometry, so the view cannot be moved through the GL matrix pipeline; it is
-moved where the vertices are, at the proxy's `glVertex3fv`/`glVertex3f` slot.
-`h47vr-cam.txt` carries `yaw=.. pitch=..` and about 2,900 eye-space vertices per
-frame are rotated by it. Verified numerically; visual confirmation in a loaded
-level is the one thing still outstanding.
+**The camera is driven from the mod, and the user has seen it move.** The engine
+transforms its own geometry, so the view cannot be moved through the GL matrix
+pipeline; it is moved where the vertices are, at the proxy's
+`glVertex3fv`/`glVertex3f` slot. `h47vr-cam.txt` carries `yaw=.. pitch=..`, about
+2,900 eye-space vertices per frame are rotated by it, and the user confirmed the
+view turns. Two rounds of work went into this: the first rotation was built in
+GL's column-major order but applied row by row, which stays orthonormal and so
+never looks broken, only subtly wrong - exactly what the user reported.
+
+**What that approach cannot do, and the next real task: the engine culls before
+we see anything.** It discards geometry outside the frustum of the camera *it*
+believes it has, so a large injected yaw shows the scene with pieces missing -
+the user's words were "we're just completely clipping". Rotating vertices cannot
+bring back what was thrown away. The engine's own view has to be driven instead,
+and finding it is the current thread of work; the leads are in the
+reverse-engineering map below.
 
 ## Working commands
 

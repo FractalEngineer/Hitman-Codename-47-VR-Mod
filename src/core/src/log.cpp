@@ -20,6 +20,7 @@ std::mutex g_mutex;
 FILE* g_file = nullptr;
 std::wstring g_path;
 std::string g_tag = "h47vr";
+thread_local bool g_in_logger = false;
 
 const char* LevelName(LogLevel level) {
     switch (level) {
@@ -103,11 +104,17 @@ void LogWriteV(LogLevel level, const char* format, std::va_list args) {
                   LevelName(level), g_tag.c_str(), message);
 
     std::lock_guard<std::mutex> lock(g_mutex);
+    g_in_logger = true;
     if (g_file != nullptr) {
         std::fputs(line, g_file);
         std::fflush(g_file);  // flush per line: the game may be terminated hard
     }
     ::OutputDebugStringA(line);
+    g_in_logger = false;
+}
+
+bool LoggerActive() {
+    return g_in_logger;
 }
 
 void LogWrite(LogLevel level, const char* format, ...) {

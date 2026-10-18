@@ -97,6 +97,53 @@ void LogSymbolProbes() {
 
 // --- hooks -----------------------------------------------------------------
 
+// The engine routes its console and debug output through OutputDebugString
+// (SysComWintel::DataToDebug). Hooking it turns the game's own console into
+// something the mod can read, which is how console commands get discovered and
+// verified without a debugger attached.
+thread_local bool g_in_debug_output = false;
+
+using OutputDebugStringAFn = void(WINAPI*)(LPCSTR);
+OutputDebugStringAFn g_real_output_debug_string = nullptr;
+std::atomic<unsigned long> g_debug_lines{0};
+
+using OutputDebugStringWFn = void(WINAPI*)(LPCWSTR);
+OutputDebugStringWFn g_real_output_debug_string_w = nullptr;
+
+void WINAPI HookOutputDebugStringA(LPCSTR text) {
+    // The logger calls this API, so anything arriving while the logger is
+    // active is our own output and must not be fed back into the logger.
+    if (text != nullptr && !g_in_debug_output && !LoggerActive()) {
+        g_in_debug_output = true;
+        const char* cursor = text;
+        while (*cursor == '\r' || *cursor == '\n') {
+            ++cursor;
+        }
+        if (*cursor != '\0') {
+            ++g_debug_lines;
+            H47VR_LOG_INFO("engine: %s", cursor);
+        }
+        g_in_debug_output = false;
+    }
+    g_real_output_debug_string(text);
+}
+
+void WINAPI HookOutputDebugStringW(LPCWSTR text) {
+    if (text != nullptr && !g_in_debug_output && !LoggerActive()) {
+        g_in_debug_output = true;
+        const wchar_t* cursor = text;
+        while (*cursor == L'\r' || *cursor == L'\n') {
+            ++cursor;
+        }
+        if (*cursor != L'\0') {
+            ++g_debug_lines;
+            H47VR_LOG_INFO("engine: %s", Narrow(cursor).c_str());
+        }
+        g_in_debug_output = false;
+    }
+    g_real_output_debug_string_w(text);
+}
+
 // SwapBuffers is presented from gdi32, not opengl32, so it is the presentation
 // hook and the first place a real frame count can come from.
 using SwapBuffersFn = BOOL(WINAPI*)(HDC);
@@ -161,6 +208,16 @@ void InstallRendererHooks() {
                reinterpret_cast<void**>(&g_real_swap_buffers));
 }
 
+void InstallConsoleCapture() {
+    HookSymbol(L"kernel32.dll", "OutputDebugStringA",
+               reinterpret_cast<void*>(&HookOutputDebugStringA),
+               reinterpret_cast<void**>(&g_real_output_debug_string));
+    HookSymbol(L"kernel32.dll", "OutputDebugStringW",
+               reinterpret_cast<void*>(&HookOutputDebugStringW),
+               reinterpret_cast<void**>(&g_real_output_debug_string_w));
+
+}
+
 }  // namespace
 
 bool Initialize(const char* trigger) {
@@ -214,6 +271,7 @@ bool Initialize(const char* trigger) {
 
     HooksInitialize();
     InstallRendererHooks();
+    InstallConsoleCapture();
     WatchModuleLoad(L"HitmanDlc.dlc", &InstallGameplayHooks);
 
     H47VR_LOG_INFO(

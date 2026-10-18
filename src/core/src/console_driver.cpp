@@ -45,10 +45,11 @@ constexpr const char* kStartSceneCommand = "startscene";
 constexpr int kWorldFieldOffset = 0x59;
 
 // The intro videos and the menu take a few seconds to settle before a scene
-// load is accepted. Wait, then retry on a slow cadence until geometry appears.
-constexpr unsigned long kFirstAttemptFrame = 300;
-constexpr unsigned long kRetryFrames = 600;
-constexpr unsigned int kMaxAttempts = 4;
+// load is accepted, and the game sometimes gives up on the front end after
+// 16-30 s, so retry across that whole window rather than at a single moment.
+constexpr unsigned long kFirstAttemptFrame = 240;
+constexpr unsigned long kRetryFrames = 300;
+constexpr unsigned int kMaxAttempts = 8;
 
 // The dispatcher is a __thiscall (`ret 8`): ECX carries the interface object and
 // the callee cleans both stack arguments. MSVC only allows __thiscall on member

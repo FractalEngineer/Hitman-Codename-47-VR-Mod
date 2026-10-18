@@ -29,6 +29,10 @@
     command dispatcher - no keystrokes and no intro skip needed. Omit to run
     with the driver idle.
 
+.PARAMETER SettleSeconds
+    How long to watch the log for a verdict (world geometry appearing, or the
+    game dying) before dumping it. Stops early as soon as either happens.
+
 .EXAMPLE
     ./tools/iterate.ps1
     ./tools/iterate.ps1 -SkipBuild -CloseGame
@@ -40,6 +44,7 @@ param(
     [ValidateSet('Release', 'Debug', 'RelWithDebInfo')]
     [string]$Configuration = 'Release',
     [int]$TimeoutSeconds = 90,
+    [int]$SettleSeconds = 45,
     [string]$Scene,
     [switch]$SkipBuild,
     [switch]$CloseGame,
@@ -153,8 +158,28 @@ if (-not $game) {
 
 Write-Host "  pid $($game.Id), window '$($game.MainWindowTitle)'"
 
-# Give the engine time to reach the renderer and flush the proxy's own lines.
-Start-Sleep -Seconds 8
+# Watch the log until there is a verdict rather than guessing how long the
+# engine needs. The mod submits its scene request a few seconds in, so the
+# interesting lines arrive without any input from the user.
+$settleDeadline = (Get-Date).AddSeconds($SettleSeconds)
+$verdict = "still watching after $SettleSeconds s"
+while ((Get-Date) -lt $settleDeadline) {
+    Start-Sleep -Milliseconds 500
+    if (-not (Get-Process -Id $game.Id -ErrorAction SilentlyContinue)) {
+        $verdict = 'the game exited'
+        break
+    }
+    $candidate = Get-ChildItem -LiteralPath $logDir -Filter *.log -ErrorAction SilentlyContinue |
+        Where-Object { $preexisting -notcontains $_.FullName } |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $candidate) { continue }
+    $snapshot = Read-SharedText $candidate.FullName
+    if ($snapshot -and $snapshot -match 'objectDrawA=[1-9]') {
+        $verdict = 'world geometry detected'
+        break
+    }
+}
+Write-Host ("  watch result: {0}" -f $verdict)
 
 $game = Get-Process -Id $game.Id -ErrorAction SilentlyContinue
 if ($game) {

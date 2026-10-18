@@ -95,6 +95,36 @@ What is known statically:
   hooked; zero lines captured), and a GDI screen grab of the GL surface is
   **pure black**. There is no text channel out of the console yet.
 
+## Console dispatcher, resolved (2026-10-18)
+
+The blocker was "what is the exact console syntax", so the dispatcher's ABI was
+read off the machine code instead of guessed:
+
+- `System.dll` RVA `0xE590` is `int __thiscall(void* self, const char* name, const char* arg)`.
+  Proven by the call site at RVA `0x104AD` (`mov ecx, edi` / `push` name /
+  `push` arg / `call`) and the `ret 8` in its prologue.
+- Its only caller (RVA `0x104AD`) is the line splitter: it terminates the
+  command name at the first `=` **or** space in the line, so `startscene C0_1`
+  and `startscene=C0_1` are equivalent, and the rest of the line is the argument.
+- `self` is the interface singleton exported by `Globals.dll`
+  (`?g_pSysInterface@@3PAVZSysInterface@@A`, RVA `0x3010`).
+- The `startscene` branch calls `(*(this+0x59))->vtbl[0x44](2, sceneName, 0)`.
+
+Because that ABI is now known, the mod does not need the in-game console at all:
+`src/core/src/console_driver.cpp` detours RVA `0xE590` (logging every line the
+engine executes, which is how a typed command can be observed) and can submit a
+`startscene` line itself from the presentation hook. The scene comes from
+`<game>\h47vr-scene.txt` or `H47VR_SCENE`; with neither set the driver is idle.
+
+```powershell
+./tools/iterate.ps1 -Scene C0_1 -CloseGame
+```
+
+MSVC rejects `__thiscall` on free functions, so the driver uses naked thunks:
+a detour that preserves every register and tail-jumps to the MinHook
+trampoline, and an invoke thunk that loads `ECX` and jumps to the same
+trampoline. The original `ret 8` cleans the stack in both directions.
+
 ## Hook map (RVAs)
 
 `HitmanDlc.dlc` (preferred base `0x0FCC0000`; it relocates):
@@ -179,10 +209,11 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86) and `third_party/minhook`
 
 ## Immediate next steps
 
-1. **Get into gameplay.** Best remaining lead: decompile the *caller* of the
-   console dispatcher (`System.dll` RVA `0xE590`) to see how the typed line is
-   split into `commandLine` and `param2` - that reveals the exact syntax for
-   `startscene`. Try `C0_1` rather than `C0_Training`.
+1. **Get into gameplay.** The dispatcher ABI is resolved and the mod now drives
+   it directly: run `./tools/iterate.ps1 -Scene C0_1` and read the summary. Success
+   is `max objectDrawA > 0`. If the scene name is rejected the dispatcher returns
+   0 and logs "Unrecognized command"; if it is accepted but nothing renders,
+   check whether `g_pSysInterface` was still null at the attempt.
 2. Once a level loads (`objectDrawA > 0` in the log), confirm
    `_ZCAMERA_MouseConCam` fires and with what arguments; then modify and verify
    the camera moves. That closes the Milestone 1 gate.

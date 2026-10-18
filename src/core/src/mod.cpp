@@ -1,5 +1,6 @@
 #include "h47vr/mod.hpp"
 
+#include "h47vr/console_driver.hpp"
 #include "h47vr/fingerprint.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
@@ -157,6 +158,9 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
         // the time the first frame is presented.
         RendererProbeInstall();
     }
+    // The engine's own thread, once per frame: the only place the console
+    // dispatcher can be re-entered safely.
+    ConsoleDriverPump(frame);
     // First few frames, then a heartbeat: enough to prove presentation is
     // intercepted and to estimate the rate without flooding the log.
     if (frame <= 5) {
@@ -272,6 +276,7 @@ bool Initialize(const char* trigger) {
     HooksInitialize();
     InstallRendererHooks();
     InstallConsoleCapture();
+    ConsoleDriverInstall();
     WatchModuleLoad(L"HitmanDlc.dlc", &InstallGameplayHooks);
 
     H47VR_LOG_INFO(

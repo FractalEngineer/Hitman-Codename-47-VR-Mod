@@ -98,6 +98,41 @@ gives a callback when `HitmanDlc.dlc` (and `RenderOpenGL.dll`) load, which is
 where the deferred hook installation belongs. Renderer work can stay on the
 proxy's own startup path because `RenderOpenGL.dll` is already there.
 
+## Console command dispatcher
+
+The engine's console and config lines both end up in one dispatcher in
+`System.dll`, so the mod can enter a level without synthesising keystrokes at
+all: it submits the line to that dispatcher itself.
+
+ABI, read from the machine code rather than guessed from the decompiler:
+
+```
+call site  System.dll rva 0x104AD   mov ecx, edi / push name / push arg / call 0xE590
+entry      System.dll rva 0xE590    push esi / mov esi, [esp+8] ... ret 8
+```
+
+`ret 8` with the object in `ECX` is `__thiscall`: two stack arguments, callee
+cleanup. The two arguments are the command name and its argument, already split
+by the caller at the first `=` or space:
+
+| Item | Value |
+| --- | --- |
+| `System.dll` dispatcher | RVA `0x0000E590`, `int __thiscall(void* self, const char* name, const char* arg)` |
+| Its only caller (line splitter) | `System.dll` RVA `0x00104AD` |
+| `self` | `Globals.dll` `?g_pSysInterface@@3PAVZSysInterface@@A`, RVA `0x00003010` |
+| `startscene` handler | `this+0x59` -> vtable `+0x44` called with `(2, sceneName, 0)` |
+
+Because MSVC rejects `__thiscall` on free functions, the mod reaches this
+through two naked thunks in `src/core/src/console_driver.cpp`: one detour that
+preserves every register and tail-jumps to the trampoline, and one invoke thunk
+that loads `ECX` and jumps to the trampoline. Both let the original `ret 8` do
+the cleanup.
+
+The line the mod submits comes from `<game>\h47vr-scene.txt` (first non-empty
+line) or the `H47VR_SCENE` environment variable; with neither present the
+driver is idle. `tools/iterate.ps1 -Scene C0_1` writes that file and reports
+`objectDrawA` from the run.
+
 ## Targets
 
 RVAs are canonical. The listed VA is only the preferred image base from the PE
@@ -117,6 +152,8 @@ headers; the modules are relocatable, so never hard-code the VA.
 | 5 | Input dispatch | `Globals.dll` | `?g_pSysInput@@3PAVZSysInput@@A` | `0x00003014` | located (singleton pointer) |
 | 5a | Engine entry | `System.dll` | `RunEngine` | `0x0000A790` | located |
 | 5b | Engine print | `System.dll` | `EditPrint` | `0x0000A770` | located |
+| 5c | Console / config command dispatcher | `System.dll` | (not exported) | `0x0000E590` | hooked, ABI confirmed from machine code |
+| 5d | Interface singleton for the dispatcher | `Globals.dll` | `?g_pSysInterface@@3PAVZSysInterface@@A` | `0x00003010` | located (singleton pointer) |
 | 6 | Weapon fire | `HitmanDlc.dlc` | `_ZITEM_FireShot` | `0x000EBA30` | located, semantics unconfirmed |
 | 7 | Interaction / pickup | `HitmanDlc.dlc` | `_ZGEOM_BasePickupTarget` | `0x0000D980` | located |
 | 7a | Interaction activate | `HitmanDlc.dlc` | `_ZGEOM_ItemActivate` | `0x00020240` | located |

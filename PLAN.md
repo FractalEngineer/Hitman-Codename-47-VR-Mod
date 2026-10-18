@@ -26,12 +26,20 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       `System.dll` (`g_pSysInput` at RVA `0x3014`, `RunEngine` at `0xA790`)
 - [x] Deferred hook installation on module load (`LdrRegisterDllNotification`); fires when
       `HitmanDlc.dlc` arrives, which is after the proxy starts
+- [x] Console/config command dispatcher located (`System.dll` RVA `0xE590`) with its ABI read
+      from the machine code (`__thiscall`, two stack arguments, `ret 8`), not from the
+      decompiler; `self` is the `Globals.dll` interface singleton at RVA `0x3010`
+- [~] In-process console driver: submits `startscene <scene>` to that dispatcher from the
+      presentation hook, so a level loads without synthesising keystrokes (built; one run
+      pending)
 - [x] First real detours in the shipping build: `gdi32!SwapBuffers` (firing, frames counted)
       and `_ZCAMERA_MouseConCam` (installed at RVA `0x0264D0`)
 - [x] Renderer map: GL import call-site analysis (`tools/ghidra/DumpReferences.java`) plus
       in-process call-rate confirmation, which identified the frame boundary and the four
       2D UI passes
 - [ ] Controllable camera: drive the camera from the mod and observe it move in a loaded level
+- [ ] Reach gameplay automatically: `objectDrawA > 0` after the console driver submits
+      `startscene C0_1` (blocker for the Milestone 1 gate)
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation

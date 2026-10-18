@@ -23,9 +23,16 @@
 .PARAMETER UninstallAfter
     Remove the mod from the game directory when finished.
 
+.PARAMETER Scene
+    Scene to load automatically. Written to <game>\h47vr-scene.txt, which the
+    mod's console driver reads at startup and submits to the engine's own
+    command dispatcher - no keystrokes and no intro skip needed. Omit to run
+    with the driver idle.
+
 .EXAMPLE
     ./tools/iterate.ps1
     ./tools/iterate.ps1 -SkipBuild -CloseGame
+    ./tools/iterate.ps1 -Scene C0_1
 #>
 [CmdletBinding()]
 param(
@@ -33,6 +40,7 @@ param(
     [ValidateSet('Release', 'Debug', 'RelWithDebInfo')]
     [string]$Configuration = 'Release',
     [int]$TimeoutSeconds = 90,
+    [string]$Scene,
     [switch]$SkipBuild,
     [switch]$CloseGame,
     [switch]$UninstallAfter
@@ -102,6 +110,17 @@ if (Test-Path -LiteralPath $manifestPath) {
     & (Join-Path $PSScriptRoot 'install-mod.ps1') -GameDir $GameDir
 }
 
+# The console driver reads this at startup. A stale request would silently
+# change the next run, so the file is always written explicitly.
+$sceneFile = Join-Path $GameDir 'h47vr-scene.txt'
+if ($Scene) {
+    Set-Content -LiteralPath $sceneFile -Value $Scene -Encoding ascii
+    Write-Host "  scene request: $Scene"
+} elseif (Test-Path -LiteralPath $sceneFile) {
+    Remove-Item -LiteralPath $sceneFile -Force
+    Write-Host '  removed a stale scene request'
+}
+
 $logDir = Join-Path $GameDir 'h47vr-logs'
 if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Path $logDir | Out-Null }
 $preexisting = @(Get-ChildItem -LiteralPath $logDir -Filter *.log -ErrorAction SilentlyContinue |
@@ -168,7 +187,34 @@ Write-Host ''
 if ($newLog) {
     Write-Host "--- $($newLog.Name) ---"
     $text = Read-SharedText $newLog.FullName
-    if ($text) { Write-Host $text }
+    if ($text) {
+        Write-Host $text
+
+        $lines = @($text -split "`n")
+        $counters = @($lines | Where-Object { $_ -match 'renderer calls' })
+        $worldDraw = 0
+        foreach ($line in $counters) {
+            if ($line -match 'objectDrawA=(\d+)') {
+                $worldDraw = [Math]::Max($worldDraw, [int]$Matches[1])
+            }
+        }
+        $camera = @($lines | Where-Object { $_ -match '_ZCAMERA_MouseConCam #' }).Count
+        $console = @($lines | Where-Object { $_ -match 'console line #' }).Count
+        $attempts = @($lines | Where-Object { $_ -match "console driver: 'startscene" })
+
+        Write-Host ''
+        Write-Host '--- summary ---'
+        Write-Host ("  renderer reports   : {0}" -f $counters.Count)
+        Write-Host ("  max objectDrawA    : {0}" -f $worldDraw)
+        Write-Host ("  camera hook hits   : {0}" -f $camera)
+        Write-Host ("  console lines seen : {0}" -f $console)
+        foreach ($attempt in $attempts) { Write-Host ("  {0}" -f $attempt.Trim()) }
+        if ($worldDraw -gt 0) {
+            Write-Host '  VERDICT: a level is rendering'
+        } else {
+            Write-Host '  VERDICT: still no world geometry'
+        }
+    }
 } else {
     Write-Host '--- no new log file: the proxy never reached mod startup ---'
 }

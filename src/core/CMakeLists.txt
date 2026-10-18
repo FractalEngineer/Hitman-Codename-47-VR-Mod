@@ -1,4 +1,5 @@
 add_library(h47vr_core STATIC
+    src/console_driver.cpp
     src/paths.cpp
     src/log.cpp
     src/fingerprint.cpp

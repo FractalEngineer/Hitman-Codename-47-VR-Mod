@@ -40,6 +40,10 @@ constexpr const char* kSysInterfaceSymbol = "?g_pSysInterface@@3PAVZSysInterface
 // space in a line, so the name and the argument are passed separately.
 constexpr const char* kStartSceneCommand = "startscene";
 
+// The dispatcher loads `mov ecx, [edi+0x59]` for the world object it hands the
+// scene name to, so that really is the field offset.
+constexpr int kWorldFieldOffset = 0x59;
+
 // The intro videos and the menu take a few seconds to settle before a scene
 // load is accepted. Wait, then retry on a slow cadence until geometry appears.
 constexpr unsigned long kFirstAttemptFrame = 300;
@@ -234,9 +238,13 @@ void ConsoleDriverPump(unsigned long frame) {
     }
 
     h47vr_command_self = self;
+    // The startscene branch refuses to do anything unless the world object at
+    // the interface's +0x59 is already constructed, and it reports that as a
+    // plain 0 with no message. Log it so a refused attempt is diagnosable.
+    void* world = *reinterpret_cast<void**>(reinterpret_cast<char*>(self) + kWorldFieldOffset);
     const int result = h47vr_invoke_command(kStartSceneCommand, g_scene.c_str());
-    H47VR_LOG_INFO("console driver: 'startscene %s' -> %d (attempt %u, frame %lu, self=%p)",
-                   g_scene.c_str(), result, g_attempts, frame, self);
+    H47VR_LOG_INFO("console driver: 'startscene %s' -> %d (attempt %u, frame %lu, self=%p, world=%p)",
+                   g_scene.c_str(), result, g_attempts, frame, self, world);
 }
 
 }  // namespace h47vr

@@ -173,9 +173,17 @@ int main() {
 
     XrInstance instance = XR_NULL_HANDLE;
     XrInstanceCreateInfo createInfo{XR_TYPE_INSTANCE_CREATE_INFO};
+    // Must be set. Leaving this at zero is accepted by the loader but the
+    // runtime then fails instance creation, which looks exactly like a broken
+    // graphics bridge and is not one.
+    createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
     ::strcpy_s(createInfo.applicationInfo.applicationName, "h47vr probe");
     createInfo.applicationInfo.applicationVersion = 1;
     ::strcpy_s(createInfo.applicationInfo.engineName, "none");
+    Info("requesting API version %u.%u.%u",
+         XR_VERSION_MAJOR(createInfo.applicationInfo.apiVersion),
+         XR_VERSION_MINOR(createInfo.applicationInfo.apiVersion),
+         XR_VERSION_PATCH(createInfo.applicationInfo.apiVersion));
     createInfo.enabledExtensionCount = static_cast<uint32_t>(enabled.size());
     createInfo.enabledExtensionNames = enabled.data();
     result = ::xrCreateInstance(&createInfo, &instance);

@@ -1,71 +1,119 @@
 # Graphics Bridge
 
-The plan's first technical gate. An unproven assumption until the tests below
-are run: that a 32-bit OpenGL application can share a process with the
-Virtual Desktop OpenXR runtime, on the connected Quest.
+The plan's first technical gate: can a 32-bit process hold a legacy Windows
+OpenGL context and an OpenXR session at the same time?
 
-## What is already proven
+**Status: PASSED, headless.** Demonstrated on 2026-10-18 with SteamVR's null
+driver as the runtime.
 
-- The 32-bit OpenGL renderer runs on this machine, launched through Steam.
-- An app-local `opengl32.dll` loads ahead of the system library and forwards
-  every export to it, so the game is unaware it is being proxied.
-- All GL traffic is fixed-function OpenGL 1.1 through the system ICD, so the
-  proxy sits directly on the path we need to instrument.
+## Gate result
 
-## What is not proven
+`src/probe/main.cpp` builds to `h47vr-openxr-probe.exe`, and it walks the bridge
+step by step, continuing after a failure so one run shows how far it gets.
 
-- Whether the runtime's OpenXR session can coexist in-process with the game's
-  legacy WGL context. The probe reaches this step but the runtime will not
-  initialise yet; see below.
-- Whether eye rendering can reuse the game's GL context or needs its own.
-- Whether `SwapBuffers` interception is sufficient for presentation control, or
-  whether the scene draw has to be re-entered.
-
-## First run results
-
-`src/probe/main.cpp` builds to `h47vr-openxr-probe.exe` with the vendored loader
-staged next to it, and walks the whole bridge step by step.
+Run headless against SteamVR (`XR_RUNTIME_JSON` pointing at
+`steamxr_win32.json`, null driver enabled):
 
 | Step | Result |
 | --- | --- |
-| Loader loads the runtime manifest | ok - `virtualdesktop-openxr-32.json` |
-| 32-bit runtime DLL is genuinely i386 | ok - `machine 0x014c`, 81 exports |
-| `xrEnumerateInstanceExtensionProperties` | ok - 31 extensions |
-| `XR_KHR_opengl_enable` advertised | **yes** |
-| `XR_KHR_D3D11_enable` advertised | yes (fallback route is available) |
-| `xrCreateInstance` | FAILED, `XR_ERROR_INITIALIZATION_FAILED` (-4) |
+| Instance extensions | 41, from `SteamVR/OpenXR` |
+| `XR_KHR_opengl_enable` advertised | yes |
+| `XR_KHR_D3D11_enable` advertised | yes (fallback route remains available) |
+| `xrCreateInstance` | ok, runtime `SteamVR/OpenXR 2.17.10` |
+| `xrGetSystem` | ok, system `SteamVR/OpenXR : null` |
+| View configuration | 1 config, 2 eyes at 1512x1680 recommended |
+| Legacy WGL context | ok, `GL 4.6.0 NVIDIA 616.92` on an RTX 4070 Ti |
+| `xrGetOpenGLGraphicsRequirementsKHR` | ok, min GL 4.3, max GL 4.6 |
+| `xrCreateSession` (OpenGL Win32 binding) | **ok** |
+| Session state | `XR_SESSION_STATE_READY` |
+| `xrBeginSession` | **ok** |
 
-The failure is neither architecture-specific nor related to OpenGL:
+SteamVR's own log confirms it treated the probe as a real OpenXR application:
 
-- An identical **64-bit** control build fails exactly the same way, so this is
-  not the 32-bit path.
-- The 32-bit failure persists with **zero** extensions enabled, so it is not the
-  OpenGL binding either.
+```
+Processing message VRMsg_ChangeAppType from 16196: h47vr-openxr-probe
+AppInfoManager.ProcessDisconnected: Clearing application
+  system.generated.openxr.h47vr probe.h47vr-openxr-probe.exe
+```
 
-The runtime is refusing to create an instance at all, which is what Virtual
-Desktop's OpenXR runtime does while no stream session is active.
+So the architecture the plan depends on is sound: a 32-bit process can hold both
+the game's legacy WGL context and a live OpenXR session. The D3D11 sharing
+fallback is not needed.
 
-What this settles:
+Virtual Desktop was re-tested with the same probe and also creates instances
+cleanly (`VirtualDesktopXR 1.0.10`). It only fails `xrGetSystem`
+(`XR_ERROR_FORM_FACTOR_UNAVAILABLE`) while no headset is streaming, which is
+expected and not a defect.
 
-- The plan's largest open risk is retired. Virtual Desktop really does ship an
-  x86 OpenXR runtime, it advertises the OpenGL binding, and our loader reaches
-  it. 32-bit was never the obstacle.
-- The remaining blocker is environmental, not architectural: the Quest has to be
-  connected through Virtual Desktop. Step 7, the session over the legacy
-  context, has not executed yet.
+## The bug that made this look impossible
 
-Reproduce (must run outside any sandbox so it can reach the runtime):
+The first runs failed `xrCreateInstance` with `XR_ERROR_INITIALIZATION_FAILED`
+against every runtime, in both architectures, with zero extensions enabled. It
+was reported here as an environmental block. **That was wrong.**
+
+```
+// what the probe did
+XrInstanceCreateInfo createInfo{XR_TYPE_INSTANCE_CREATE_INFO};
+createInfo.applicationInfo.applicationName = "h47vr probe";
+// applicationInfo.apiVersion left at zero
+
+// what it must do
+createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
+```
+
+The loader accepts an unset `apiVersion`; the runtime then rejects instance
+creation. The symptom is indistinguishable from a broken graphics bridge, and it
+produced a false conclusion that the hardware was at fault.
+
+Lesson recorded: when two independent runtimes fail identically at the *same*
+step, suspect the caller before the environment.
+
+## Runtime facts
+
+| Item | Finding |
+| --- | --- |
+| Active 32-bit runtime | Virtual Desktop (`virtualdesktop-openxr-32.json`), runtime 1.0.10 |
+| SteamVR 32-bit runtime | `SteamVR\bin\vrclient.dll`, genuinely i386, exports `xrNegotiateLoaderRuntimeInterface` |
+| SteamVR 64-bit runtime | `SteamVR\bin\vrclient_x64.dll` |
+| SteamVR null driver | `drivers\null\bin\win32\driver_null.dll`, enabled by `driver_null.enable` in `steamvr.vrsettings` |
+| Loader | Vendored: `third_party/openxr/lib/x86/openxr_loader.dll`, built from `release-1.1.65` |
+| Oculus / Meta runtimes | Registered but **stale**: the manifest files do not exist |
+| Headset | Meta Quest 3, per `steamvr.vrsettings` (`oculus_virtualdesktop` driver) |
+| GPU | NVIDIA RTX 4070 Ti, driver 32.0.16.1692 |
+
+No `openxr_loader.dll` existed anywhere on the machine, in either architecture,
+so `tools/fetch-openxr.ps1` clones the SDK at a pinned tag and builds the x86
+loader with the Visual Studio toolchain, installing it under `third_party/openxr`
+with the generated public headers and import library.
+
+### Correction to the plan
+
+The plan recorded "SteamVR ships a 64-bit loader only". That conflated the
+OpenXR *loader* with the OpenXR *runtime*. SteamVR ships a real 32-bit OpenXR
+runtime, which is what makes the headless gate possible.
+
+## Headless operation
+
+`tools/steamvr-headless.ps1` enables SteamVR's null HMD driver, starts SteamVR
+and backs up `steamvr.vrsettings` first. `-Action Disable` stops SteamVR and
+restores the original config. The null driver's own default `loadPriority` is
+-999, so a real headset always wins when one is connected.
 
 ```powershell
-./tools/build.ps1 -Target h47vr_openxr_probe
+./tools/steamvr-headless.ps1 -Action Enable
+$env:XR_RUNTIME_JSON = 'C:\Program Files (x86)\Steam\steamapps\common\SteamVR\steamxr_win32.json'
 ./build/bin/probe/h47vr-openxr-probe.exe
+./tools/steamvr-headless.ps1 -Action Disable
 ```
+
+The probe builds into `build/bin/probe`, deliberately not `build/bin`: the
+app-local `opengl32.dll` proxy lives there, and Windows would load it into the
+probe, silently layering the mod underneath it.
 
 ### Side finding: the fingerprint gate proved itself on the wrong host
 
-The probe first ran from `build/bin`, which is also where the app-local
-`opengl32.dll` proxy is built. Windows loaded that proxy into the probe process,
-so the mod started inside a program that is not the game. The gate refused:
+Before the probe was isolated, it loaded our proxy and the mod started inside a
+program that is not the game. The gate refused:
 
 ```
 [error] unsupported build (appid 6900 buildid 251800): 11 missing, 0 mismatched.
@@ -73,54 +121,26 @@ so the mod started inside a program that is not the game. The gate refused:
 ```
 
 That is the "unknown builds receive a clear compatibility message" acceptance
-test demonstrating itself on an unintended host, which is a better proof than a
-deliberate test would have been. The probe now builds into `build/bin/probe` so
-it exercises the system OpenGL path like a clean pre-installation run.
+test demonstrating itself on an unintended host, which is a stronger proof than
+a deliberate test.
 
-## Runtime facts
+## What is not proven yet
 
-| Item | Finding |
-| --- | --- |
-| 32-bit runtime | Registered: `HKLM\SOFTWARE\WOW6432Node\Khronos\OpenXR\1` -> `virtualdesktop-openxr-32.json` |
-| Runtime DLL | `C:\Program Files\Virtual Desktop Streamer\OpenXR\virtualdesktop-openxr-32.dll` |
-| Loader | Vendored: `third_party/openxr/lib/x86/openxr_loader.dll`, built from `release-1.1.65` |
-| SteamVR | 64-bit loader only, so it is not a fallback for a 32-bit host |
-
-No `openxr_loader.dll` existed anywhere on the machine, in either architecture,
-which blocked the gate before anything could be tested. `tools/fetch-openxr.ps1`
-now clones the SDK at a pinned tag and builds the x86 loader with the Visual
-Studio toolchain, installing it under `third_party/openxr` together with the
-generated public headers and the import library.
-
-Verified: the vendored loader is i386 (`machine 0x014c`) and exports the expected
-entry points, including `xrCreateInstance`, `xrGetSystem`, `xrCreateSession`,
-`xrEnumerateInstanceExtensionProperties` and `xrGetInstanceProcAddr`.
-
-The mod ships this loader next to itself; it is the piece that reads the
-registry entry above and loads the active runtime.
-
-## Test order
-
-1. **Loader smoke test.** Build or vendor the x86 loader, create an
-   instance with the `XR_KHR_opengl_enable` extension, and enumerate system
-   properties from inside a 32-bit process. This does not need the game.
-2. **Coexistence.** From inside the proxied process, create a second WGL context
-   on the game's window and submit a frame to OpenXR. If the runtime refuses a
-   legacy WGL context, record the exact failure.
-3. **Fallback.** If step 2 fails, test OpenGL-to-D3D11 GPU texture sharing and
-   submit through OpenXR/D3D11.
-4. **Last resort.** CPU image copies, for diagnostics only, never as the release
-   architecture.
-
-Steps 1 and 2 are cheap and decide the whole architecture, so they come before
-any gameplay hook is written.
+- Whether eye rendering can reuse the game's GL context or needs its own. The
+  runtime requires GL 4.3+, and the game's context comes from the same ICD, so
+  this looks fine, but it is untested inside the game process.
+- Whether `SwapBuffers` interception is sufficient for presentation control, or
+  whether the engine's scene draw has to be re-entered.
+- Nothing here exercised a real headset. The gate proves API and context
+  coexistence, not that frames reach the Quest. That needs a Virtual Desktop
+  stream session.
 
 ## Presentation path
 
 `SwapBuffers` comes from `gdi32.dll`, not from `opengl32.dll`. Interception
 therefore belongs on `gdi32`, either by import table patching in
-`RenderOpenGL.dll` or by a hook. The proxy remains the load point for the mod;
-it is not the presentation hook.
+`RenderOpenGL.dll` or by a hook. The proxy remains the load point for the mod; it
+is not the presentation hook.
 
 ## Engine constraints to respect
 

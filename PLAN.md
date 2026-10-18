@@ -40,15 +40,17 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [~] Locate camera transforms, world rendering, visibility calculation, input dispatch and weapon firing
       (camera, visibility, input and weapon located by exported name; renderer draw candidates
       identified by RVA; no semantics confirmed in a debugger yet)
-- [ ] Validate an x86 OpenXR session on the connected Quest (blocked on hardware: the probe
-      reaches the runtime, which advertises `XR_KHR_opengl_enable`, but refuses `xrCreateInstance`
-      until a Virtual Desktop stream session is active - a 64-bit control fails identically, so
-      this is environmental rather than a 32-bit limitation)
+- [x] Graphics bridge gate: prove one 32-bit process can hold the legacy WGL context and an
+      OpenXR session at once. Passed headless via SteamVR's null driver - instance created,
+      system found, 2 eyes at 1512x1680, GL 4.6 context, session READY, `xrBeginSession` ok
+- [~] Validate the same through Virtual Desktop on the Quest (VDXR creates instances fine and
+      advertises `XR_KHR_opengl_enable`; `xrGetSystem` needs an active stream session, so this
+      awaits a connected headset)
 - [~] Deliver a hook map and a graphics-bridge result (hook map now carries resolved symbols and
       RVAs; graphics bridge still untested)
 
-Gate: not yet met. A controllable camera and a workable VR graphics path are both
-still unproven, so interaction work stays blocked.
+Gate: the VR graphics path is now proven. The controllable camera still is not,
+so interaction work stays blocked until a camera hook exists.
 
 ### Milestone 2 - correct stereo rendering
 
@@ -143,8 +145,11 @@ instrumented yet.
   DirectInput.
 - Virtual Desktop's OpenXR runtime is registered for both process
   architectures, including `HKLM\SOFTWARE\WOW6432Node\Khronos\OpenXR\1\ActiveRuntime`
-  pointing at `virtualdesktop-openxr-32.json`. SteamVR ships a 64-bit loader
-  only.
+  pointing at `virtualdesktop-openxr-32.json`. SteamVR also ships a genuine
+  32-bit OpenXR runtime (`bin\vrclient.dll`) plus a null HMD driver; the
+  original note here claimed SteamVR was 64-bit only and was corrected during
+  Milestone 1. The Oculus/Meta runtime entries on this machine are stale - the
+  manifests they point at do not exist.
 - An existing third-party `DSOUND.dll` proxy wrapper and the `h1w.asi`
   widescreen fix are installed. Their project names are leaked in debug strings.
   Neither should be hooked or replaced, and both need compatibility testing.
@@ -334,14 +339,16 @@ Standalone Quest execution is outside this plan.
 
 ### Open Risks
 
-- Graphics bridge: direct OpenXR/OpenGL coexistence in-process is unproven and
-  is the first gate. The D3D11 sharing path is the fallback.
+- Graphics bridge: **retired**. Direct OpenXR/OpenGL coexistence in one 32-bit
+  process is proven (headless, via SteamVR's null driver). The D3D11 sharing
+  path is no longer needed.
 - Capture and replay fidelity: if the engine's draw stream cannot be replayed
   cleanly, the fallback is hooking and re-entering the scene-draw function.
 - Independent weapon aiming and interaction hooks may not exist cleanly. The
   documented fallback is head-aim with a hand-mounted weapon model.
 - 32-bit OpenXR limits v1 to runtimes that ship an x86 runtime. Virtual Desktop
-  and Meta do, SteamVR does not.
+  and SteamVR both do. This risk is retired: the graphics bridge passed headless
+  through SteamVR's 32-bit runtime.
 
 For one experienced developer, budget approximately 2 to 4 weeks for the
 feasibility investigation, followed by several months for a polished playable

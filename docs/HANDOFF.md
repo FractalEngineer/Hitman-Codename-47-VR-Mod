@@ -1,274 +1,244 @@
 # Handoff
 
-Copy this file's contents into a new chat to resume with full context.
-
----
+Resume work from here. This supersedes every earlier handoff.
 
 ## Mission
 
-Finish a native 32-bit x86 VR mod for the Steam release of *Hitman: Codename 47*
+Native 32-bit x86 VR mod for the Steam release of *Hitman: Codename 47*
 (appid 6900, buildid 251800). Plan of record is `PLAN.md`, with a living
-progress checklist at the top of it. Keep that checklist updated in the same
-commit as the work.
+progress checklist at the top of it - **update that checklist in the same commit
+as the work**.
 
-Repository: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
+Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
 
-## Hard-won environment facts
+## Where things stand (2026-10-19)
 
-- Game: `E:\SteamLibrary\steamapps\common\Hitman Codename 47`. All 11 hashes in
-  `pins/build_251800.txt` match. The mod refuses to patch anything else.
-- Toolchain: MSVC 14.44 x86 via VS 2022 Community (resolve it with
-  `vswhere -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64`; there is
-  also a VS "18" install *without* C++ tools). CMake 3.29, Ninja, Python 3.13.
-- Ghidra 12.1.4 at `C:\Users\titan\tools\ghidra_12.1.4_PUBLIC`, JDK 21 at
-  `C:\Users\titan\tools\jdk-21.0.12.1+1` (set `JAVA_HOME` before running it).
-- GPU RTX 4070 Ti. Headset: Meta Quest 3 over Virtual Desktop.
+**The long-standing blocker is gone.** The game can be driven into a level with
+no keyboard input, and `_ZCAMERA_MouseConCam` has now been observed firing in a
+loaded level - the Milestone 1 signal this project spent weeks chasing.
 
-### Launch chain (do not fight this)
+The game's own level start is
 
-- `Hitman.Exe` has an obfuscated Steam check. Launched directly it shows
-  `Failed to find Steam.` and exits `0xFFFFFFFF`.
-- The game uses the **legacy `steam.dll`**, not `steam_api.dll`, and only accepts
-  a launch performed by the Steam client. Launch with:
-  `steam.exe -applaunch 6900`.
-- `runme.exe` is Valve's DRM stub; `runme.dat` contains `hitman.exe`.
-- The game runs **fullscreen borderless at 800x600** (window 1682x1022, no
-  `WS_CAPTION` on a 2560x1440 desktop). Adding `Window 1` to `Hitman.ini` did
-  **not** make it windowed. While it runs, the user cannot use their desktop.
-- Intro videos play on start; **ESC must be pressed to reach the menu.**
-- The user reports the game sometimes exits on its own after ~16-30 s if the
-  intro is not skipped.
+```c
+world->vtbl[0x88](levelName, 0, 0);
+```
 
-## What is proven working
+read out of `FUN_0fd3b609` (`HitmanDlc.dlc` RVA `0x7B609`), which reads the
+string property `strPreScene`, maps the `_Pre` name to the plain level name
+through a 13-entry `strcmp` chain, logs `Prescene push %s`, and calls that slot.
+`ScenePushLevel` in `src/core/src/scene_probe.cpp` reproduces it exactly.
 
-- **Proxy loader.** App-local `opengl32.dll` loads ahead of the system library and
-  forwards **368/368** exports. It must re-export the *entire* surface: `gdi32`'s
-  `ChoosePixelFormat`/`DescribePixelFormat`/`SetPixelFormat`/`GetPixelFormat`
-  delegate to `opengl32!wgl*` at run time, so an import-scoped proxy breaks the
-  game with `SelectPixelFormat failed`.
-- **Presentation.** `SwapBuffers` comes from **gdi32**, not opengl32. It is hooked
-  and firing; frames are counted.
-- **Deferred gameplay hooks.** `LdrRegisterDllNotification` fires when
-  `HitmanDlc.dlc` loads (it loads *after* the proxy starts) and installs hooks off
-  the loader lock. Verified: module base `0x0E980000`, camera entry
-  `0x0E9A64D0` = RVA `0x0264D0`, exactly as recorded. **The module relocates, so
-  always use RVAs.**
-- **MinHook** detours work in the shipping build.
-- **OpenXR graphics bridge: PASSED headless.** Via SteamVR's null driver:
-  instance created, `xrGetSystem` ok, 2 eyes at 1512x1680, legacy WGL context at
-  GL 4.6.0, `xrCreateSession` over the OpenGL Win32 binding ok, session READY,
-  `xrBeginSession` ok. Virtual Desktop's 32-bit runtime (`VirtualDesktopXR
-  1.0.10`) also creates instances and advertises `XR_KHR_opengl_enable`, but
-  needs an active stream for `xrGetSystem`.
-- **Key injection verified at the OS level.** `SendInput` produces real key state
-  (`GetAsyncKeyState` showed ESC down `0x8001`; INPUT is 40 bytes on x64).
+Confirmed by the user: the push lands **exactly at the start of the level**. A
+scripted cutscene plays before control - **ESC skips it**, otherwise it ends on
+its own and control is handed over. There is no skip string anywhere in the
+module (cutscenes are `CutSequence` data on a fixed timeline), so a test loop
+should push, wait for the cutscene, then drive the camera.
 
-## Current blocker: getting into gameplay
-
-The camera hook is installed but **has never been observed firing**, because the
-game has not reached a level. Everything else in Milestone 1 depends on this.
-
-What has been tried and failed:
-
-- Direct launches and `SteamAppId` env vars — the DRM refuses.
-- Guessing console syntax: `startscene=C0_Training`, `startscene C0_Training`,
-  `StartScene=C0_Training`. Wrong scene name and/or wrong syntax.
-- Sending ESC + console commands by `SendInput` while refocusing. Keys are
-  proven to reach the OS, but the game did not respond, and it exited early.
-
-What is known statically:
-
-- Scene names are **relative paths without the extension**. `HitmanDlc.dlc`
-  holds the level-select table right next to `StateSelectLevel`:
-
-  ```
-  0x2299A0 C1_HongKong\C1_1
-  0x2299B4 C0_Training\C0_1      <- training, the entry this project needs
-  ```
-
-  so the argument is `C0_Training\C0_1`, resolving to `C0_Training\C0_1.zip`. A
-  second table at `0x2275xx` holds the bare names (`C0_1`, `C1_1`, ...) used to
-  build the `_Pre` pre-scene variants, which is why bare `C0_1` looked right and
-  was not.
-- Console dispatcher: `System.dll` RVA **`0xE590`**, signature
-  `__thiscall(void* this, char* commandLine, void* param2)`. The `startscene`
-  branch calls a virtual function: `(vtbl+0x44)(2, param2, 0)`.
-- Its help text, printed next to `Commandline:`, lists:
-  `ReloadEngine, Exit, StartScene=[str]`, `PrintStatus`, `DoAllocCheck`,
-  `Ingame: Packfile=[str], AutoDumpName=[str], LoadFilter=[.ext;.ext...],
-  Include=[str], DefaultScene=[str], SoundBank=[str], AnimFile=[str],
-  ProjectFile=[str]`.
-- `ConsoleCmd` is recognised as an ini key but has **no handler** in the ini
-  parser (`System.dll` RVA `0xEA00`) - dead end.
-- Console output is **not** routed through `OutputDebugString` (both A and W are
-  hooked; zero lines captured), and a GDI screen grab of the GL surface is
-  **pure black**. There is no text channel out of the console yet.
-
-## Console dispatcher, resolved (2026-10-18)
-
-The blocker was "what is the exact console syntax", so the dispatcher's ABI was
-read off the machine code instead of guessed:
-
-- `System.dll` RVA `0xE590` is `int __thiscall(void* self, const char* name, const char* arg)`.
-  Proven by the call site at RVA `0x104AD` (`mov ecx, edi` / `push` name /
-  `push` arg / `call`) and the `ret 8` in its prologue.
-- Its only caller (RVA `0x104AD`) is the line splitter: it terminates the
-  command name at the first `=` **or** space in the line, so `startscene C0_1`
-  and `startscene=C0_1` are equivalent, and the rest of the line is the argument.
-- `self` is the interface singleton exported by `Globals.dll`
-  (`?g_pSysInterface@@3PAVZSysInterface@@A`, RVA `0x3010`).
-- The `startscene` branch calls `(*(this+0x59))->vtbl[0x44](2, sceneName, 0)`.
-
-Because that ABI is now known, the mod does not need the in-game console at all:
-`src/core/src/console_driver.cpp` detours RVA `0xE590` (logging every line the
-engine executes, which is how a typed command can be observed) and can submit a
-`startscene` line itself from the presentation hook. The scene comes from
-`<game>\h47vr-scene.txt` or `H47VR_SCENE`; with neither set the driver is idle.
+## Working commands
 
 ```powershell
+# deploy the current build + launch via Steam (the deploy step matters: Steam
+# runs whatever is in the game directory, so a bare launch runs the OLD build)
+./tools/enter-level.ps1 -BurstSeconds 0 -KeepOpen
+
+# into a level, any time after that, no relaunch and no keyboard
+./tools/drive.ps1 -Scene 'push:C0_Training\C0_1'
+
+# full loop: build, install, launch, watch the log, close
 ./tools/iterate.ps1 -Scene C0_1 -CloseGame
 ```
 
-**That scheduled path fires too early and is now only a fallback.** The game does
-not reach its menu by itself: the intro videos need a human ESC, so a request
-submitted from start-up always lands while the videos are still playing. The
-reliable path is `tools/drive.ps1`, which writes `<game>\h47vr-go.txt`; the mod
-polls for that file at a frame boundary, submits the scene named inside it, and
-deletes it. Run it once the game is sitting at the front end:
+Every level is reachable: `C0_Training\C0_1`, `C1_HongKong\C1_1..C1_4`,
+`C2_RotterdamHarbor\C2_1/C2_2`, `C3_BudapestHotel\C3_1`,
+`C4_ColombianRainforest\C4_1..C4_3`, `C5_Sanitarium\C5_1/C5_2`.
 
-```powershell
-./tools/drive.ps1 -Scene 'C0_Training\C0_1'
-```
+The request file `<game>\h47vr-go.txt` is polled at frame boundaries and
+consumed on sight. Its payload decides what happens:
 
-That means a scene name can be tried **without relaunching**.
-
-MSVC rejects `__thiscall` on free functions, so the driver uses naked thunks:
-a detour that preserves every register and tail-jumps to the MinHook
-trampoline, and an invoke thunk that loads `ECX` and jumps to the same
-trampoline. The original `ret 8` cleans the stack in both directions.
-
-## Hook map (RVAs)
-
-`HitmanDlc.dlc` (preferred base `0x0FCC0000`; it relocates):
-
-| Symbol | RVA |
+| Payload | Meaning |
 | --- | --- |
-| `_ZCAMERA_BaseCamera` | `0x020E80` |
+| `push:<level>` | **the working level load** (game's own slot) |
+| `<mode>:<name>` | call the EngineData command entry directly with that mode |
+| anything else | console `startscene <line>` (dead end, kept for reference) |
+
+## Environment
+
+- Game: `E:\SteamLibrary\steamapps\common\Hitman Codename 47`. All 11 hashes in
+  `pins/build_251800.txt` match; the mod refuses to patch anything else.
+- Toolchain: MSVC 14.44 x86 via VS 2022 Community (`vswhere -requires
+  Microsoft.VisualStudio.Component.VC.Tools.x86.x64`), CMake 3.29, Ninja,
+  Python 3.13.
+- Ghidra 12.1.4 at `C:\Users\titan\tools\ghidra_12.1.4_PUBLIC`, JDK 21 at
+  `C:\Users\titan\tools\jdk-21.0.12.1+1` (set `JAVA_HOME` before running it;
+  Ghidra needs `require_escalated` because it writes under `%APPDATA%`).
+- GPU RTX 4070 Ti. Headset: Meta Quest 3 over Virtual Desktop.
+- The game is currently **windowed** (a bare `Window` line in `Hitman.ini`), so
+  the user can see Codex while it runs.
+
+### Launch chain (do not fight this)
+
+- `Hitman.Exe` has an obfuscated Steam check; launched directly it says
+  `Failed to find Steam.` and exits `0xFFFFFFFF`. The game uses the legacy
+  `steam.dll` and only accepts a launch by the Steam client:
+  `steam.exe -applaunch 6900`.
+- The engine reads `Hitman.ini` **before** the renderer loads, so those lines
+  are processed before the mod exists and cannot be observed from inside.
+  `Anisotropy`, `ShadowDetail`, `TextureResolution` reach the EngineData
+  entry as `mode=1`, which is how that entry was identified.
+
+## What is proven working
+
+- **Proxy loader.** App-local `opengl32.dll` forwards 368/368 exports. It must
+  re-export the *entire* surface: `gdi32`'s pixel-format calls delegate to
+  `opengl32!wgl*` at run time, so an import-scoped proxy breaks the game with
+  `SelectPixelFormat failed`.
+- **Presentation.** `SwapBuffers` comes from **gdi32**; hooked and counting.
+- **Deferred hooks** off the loader lock via `LdrRegisterDllNotification`.
+- **Re-arming after module reloads.** Level transitions reload the engine's
+  modules and discard every patch. Loads now raise a flag and the frame boundary
+  re-installs renderer, camera, console and scene-probe hooks. Module load/unload
+  history is recorded under the loader lock and flushed from the render thread.
+- **Level entry, keyboard-free.** See above. Verified end to end by the user.
+- **Gameplay camera observed.** `_ZCAMERA_MouseConCam` fires (rarely - it is
+  camera setup, not the per-frame update), with a stable first argument.
+- **Console/config dispatcher reached in-process.** `System.dll` RVA `0xE590`
+  is `__thiscall(object, name, arg)` with `ret 8`, verified from the machine code
+  at its call site (RVA `0x104AD`) and its prologue. It splits a line at the
+  first `=` or space. `self` is `Globals.dll`'s
+  `?g_pSysInterface@@3PAVZSysInterface@@A` at RVA `0x3010`.
+
+## Reverse-engineering map
+
+Modules relocate, so **always use RVAs**. Preferred bases in brackets.
+
+`HitmanDlc.dlc` [`0x0FCC0000`]:
+
+| Item | RVA |
+| --- | --- |
+| Level start `FUN_0fd3b609` (calls `world->vtbl[0x88](level,0,0)`) | `0x7B609` |
+| Level -> `_Pre` mapping chain (13 `strcmp` + level names) | `0x7B650`..`0x7B850` |
+| `_ZWINGROUP_StatePreScene` descriptor / its handler | `0x7B0A0` / `FUN_0fd3b0d0` |
+| `_ZWINGROUP_StateSelectLevel` descriptor / handler | `0x7D040` / `FUN_0fd3d070` |
+| `_ZWINGROUP_StateMain` descriptor / handler | `0x79280` / `FUN_0fd392b0` |
+| `_ZWINGROUP_StateIntro` descriptor / handler | `0x608A0` / `FUN_0fd208d0` |
+| `_ZGEOM_DemoMode` (front-end screen whose script is `ZGEOMREF StateIntro`) | `0x26D0` |
+| Level-name table (data, plain names) | file `0x2299A0`..`0x2299B4` |
 | `_ZCAMERA_MouseConCam` | `0x0264D0` |
-| `_ZCAMERA_MainCameraControl` | `0x023940` |
-| `_ZCAMERA_NewFollowCam2` | `0x029700` |
-| `_ZCAMERA_ScopeCamera` | `0x02D060` |
+| `_ZCAMERA_BaseCamera` / `_MainCameraControl` / `_NewFollowCam2` / `_ScopeCamera` | `0x020E80` / `0x023940` / `0x029700` / `0x02D060` |
 | `_ZLIST_SortCameraControls` | `0x023430` |
-| `_ZGEOM_AdoptVisibility` | `0x159050` |
-| `_ZLIST_CheckVisible` | `0x14DE30` |
+| `_ZGEOM_AdoptVisibility` / `_ZLIST_CheckVisible` | `0x159050` / `0x14DE30` |
 | `_ZITEM_FireShot` | `0x0EBA30` |
-| `_ZGEOM_BasePickupTarget` | `0x00D980` |
-| `_ZGEOM_ItemActivate` | `0x020240` |
+| `_ZGEOM_BasePickupTarget` / `_ZGEOM_ItemActivate` | `0x00D980` / `0x020240` |
 
-`Globals.dll`: `?g_pSysInput@@3PAVZSysInput@@A` RVA `0x003014`.
-`System.dll`: `RunEngine` `0xA790`, `EditPrint` `0xA770`.
-`HitmanDlc.dlc` exports **343** named symbols; the full table is
-`docs/re/hitmandlc_exports.txt`.
+`Globals.dll` [`0x0FFF0000`]: `?g_pSysInterface...` `0x3010`,
+`?g_pSysInput...` `0x3014`.
 
-`RenderOpenGL.dll` (loaded at preferred base `0x0FB70000` in testing):
+`System.dll` [`0x0FFA0000`]: `RunEngine` `0xA790`, `EditPrint` `0xA770`,
+console/config dispatcher `0xE590`, its line-splitting caller `0x104AD`.
 
-| Target | RVA | Measured |
-| --- | --- | --- |
-| present (only caller of `SwapBuffers`) | `0x0048F0` | ~1 per frame |
-| frame draw (`RenderWintelOpenGLDraw.cpp`) | `0x003680` | **~17-18 per frame**, i.e. per pass |
-| object draw (`glDrawElements`, model matrix) | `0x006590` | 0 at the menu |
-| object draw variant (`glCullFace`) | `0x006270` | 0 at the menu |
-| 2D UI passes (`glOrtho` + `glViewport`) | `0x004930`, `0x005300`, `0x005A10`, `0x005F20`, `0x002EC0` | menu layers |
-| texture upload | `0x0015E0`, `0x013000`, `0x013700`, `0x014170` | |
+`EngineData.dll` [`0x0FF60000`]: RVA `0xEF60` is the **settings/clip** entry
+(`EngineData.cpp`; switches on `Cams`, `Hira`, `Dir`, `HiraClip`, `DirClip`);
+the world vtable is at RVA `0x30298`.
 
-The eye loop belongs at **`0x0048F0`** (once per frame). `0x003680` is per-pass
-and would render ~18 partial eyes. **Gap:** `glFrustum` is only called from code
-Ghidra has not defined as a function; that projection setup must be recovered
-before asymmetric per-eye projections can be added.
+`RenderOpenGL.dll` (loads at `0x0FB70000`): present `0x0048F0` (~1/frame, the
+only caller of `SwapBuffers`), frame draw `0x003680` (~17-22 passes/frame),
+`glDrawElements` candidates `0x006590` and `0x006270`, 2D UI passes `0x004930`,
+`0x005300`, `0x005A10`, `0x005F20`, `0x002EC0`.
+
+Front end structure: every screen is an **exported wing group**
+(`_ZWINGROUP_*`) built by a descriptor that stores a script string, a handler, a
+float and an id, and screens are switched **by name** via
+`vtbl[0x49c]("StateSelectLevel")`. Front-end data is a name/value registry
+reached from the world object: `world->vtbl[0x2c]()` (strings, get/set via
+`vtbl[0xb0]`/`vtbl[0x1c]`) and `world->vtbl[0x30]()` (objects, set via
+`vtbl[0x54]`), holding names such as `strPreScene`, `lProfileManager`,
+`lCurrentProfile`.
+
+The world object is `*(interface + 0x59)` - an odd but verified offset
+(`mov ecx, [edi+0x59]` in the dispatcher's prologue).
+
+## Dead ends - do not revisit
+
+- **Console `startscene <name>`.** It "succeeds" (`-> 1`) and loads nothing. The
+  dispatcher hard-codes `mode 2` and discards the callee's result, so the return
+  value never meant anything.
+- **`EngineData.dll` RVA `0xEF60` as a level loader.** It is the settings/clip
+  entry. `mode 0` returns a pointer, `mode 1` is settings, `mode 2` returns 1 and
+  loads nothing. Hitman.ini's `Anisotropy`/`ShadowDetail`/`TextureResolution`
+  lines are its `mode=1` calls.
+- **`objectDrawA`** (RenderOpenGL RVA `0x6590`) stays `0` while a level renders
+  at 62 FPS. It is **not** a world-geometry signal; that part of the renderer map
+  needs redoing.
+- **Synthesised keyboard input.** `Keys.ps1` now emits hardware scan codes and
+  sends key-down and key-up in separate calls with a gap (DirectInput-era games
+  ignore VK-only zero-duration taps), and focus was verified. It still never
+  skipped the intro. The user presses ESC. Do not pour more time into input
+  injection unless it becomes necessary.
+- **`llLevels`** is the archive name inside `AllLevels/...` paths, not a
+  level-selection property.
 
 ## Tooling
 
 ```powershell
 ./tools/fingerprint.ps1          # verify the 11 pins
 ./tools/build.ps1                # x86 build (Ninja + vswhere-selected MSVC)
-./tools/install-mod.ps1          # proxy + OpenGL renderer + manifest (reversible)
+./tools/install-mod.ps1          # proxy + manifest (reversible)
 ./tools/uninstall-mod.ps1        # restore + re-verify pins
-./tools/iterate.ps1              # build, install, steam launch, tail log
-./tools/enter-game.ps1           # launch, ESC burst, optional console commands, closes game
-./tools/send-keys.ps1            # send vk:/text: sequences (uses tools/Keys.ps1)
+./tools/iterate.ps1              # build, install, launch, watch, optional -Scene
+./tools/enter-level.ps1          # deploy + launch (+ optional scene request)
+./tools/drive.ps1                # write h47vr-go.txt now, no relaunch
+./tools/send-keys.ps1            # vk:/text: sequences, scan codes
 ./tools/steamvr-headless.ps1     # -Action Enable|Disable|Status (null HMD)
 ./tools/ghidra-analyze.ps1       # headless analysis + anchor extraction
-python tools/peutils.py <dll>    # list exports with RVAs
+python tools/peutils.py <dll>    # exports with RVAs
 ```
 
 Ghidra scripts in `tools/ghidra/`: `ExtractAnchors.java`, `DumpReferences.java`
-(GL import call sites), `DecompileXrefs.java` (decompile whatever references a
-string - syntax: `<outDir> <needle>...`). Run them against the existing project:
+(GL import call sites), `DecompileXrefs.java` (find + decompile whatever
+references a string), `DecompileCallers.java`, `DumpRefsTo.java` (refs to an
+address), `DecompileAt.java` (materialises a function Ghidra never defined, then
+decompiles it - this is what cracked the level start). Run:
 
 ```
-analyzeHeadless ghidra_project h47vr -process System.dll -noanalysis
-  -scriptPath tools/ghidra -postScript DecompileXrefs.java tools/_ghidra_out <needle>
+analyzeHeadless ghidra_project h47vr -process <module> -noanalysis
+  -scriptPath tools/ghidra -postScript DecompileAt.java tools/_ghidra_out <abs addr>
 ```
 
-Vendored: `third_party/openxr` (loader 1.1.65, x86) and `third_party/minhook`
-(v1.3.4). Built by `tools/fetch-openxr.ps1` / `tools/fetch-minhook.ps1`.
+Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
+(v1.3.4).
 
 ## Rules that save time
 
 - Anything touching `E:\`, `%APPDATA%`, or `.git` needs
-  `sandbox_permissions: require_escalated`. `git add`/`commit` also need it.
-- PowerShell `-File` splits comma lists into separate argv entries. Split inside
-  the script (`$x = @($x | % { $_ -split ',' })`).
-- The game must be closed before install/uninstall.
-- The user's desktop is unusable while the game runs (fullscreen 800x600). Close
-  the game when done; do not launch repeatedly without saying so.
+  `sandbox_permissions: require_escalated`.
+- **Deploy before launching.** Steam runs whatever is in the game directory; a
+  bare launch silently runs the previous build (`enter-level.ps1` and
+  `iterate.ps1` deploy automatically).
+- The game must be closed before replacing its DLLs.
 - Never call `OutputDebugString` from a detour without a `LoggerActive()` guard -
-  the logger calls that API and the mutex is non-recursive (this deadlocked the
+  the logger calls that API and its mutex is not recursive (this deadlocked the
   game once).
-- The gameplay exports are `_name` with no `@N`, i.e. **cdecl**, which makes an
-  unknown arity safe to forward. Renderer internals are likely `__thiscall`; use
-  convention-agnostic naked thunks that preserve flags and args.
+- Recorded module load/unload events are written from the render thread, never
+  logged from the loader-notification thread.
+- PowerShell `-File` splits comma lists into separate argv entries; split inside
+  the script.
+- Screenshots: `CopyFromScreen` on the window rect grabs whatever is on top.
+  Ask the user, or bring the game forward first.
 
 ## Immediate next steps
 
-### Repeatable level entry (solved 2026-10-19)
-
-```powershell
-./tools/enter-level.ps1 -BurstSeconds 0 -KeepOpen     # deploy + launch via Steam
-./tools/drive.ps1 -Scene 'push:C0_Training\C0_1'      # any time after that
-```
-
-No keyboard, no menu, no console: the game can be pushed into a level straight
-from the front end. `world->vtbl[0x88](levelName, 0, 0)` is the game's own level
-start, read out of `FUN_0fd3b609` (HitmanDlc.dlc RVA `0x7B609`), which reads the
-string property `strPreScene`, maps the `_Pre` name to the plain level name and
-then calls that slot. Verified: the training level loaded and the gameplay
-camera fired 0.6 s later.
-
-Scene names are the plain ones from the level table:
-`C0_Training\C0_1`, `C1_HongKong\C1_1..C1_4`, `C2_RotterdamHarbor\C2_1/C2_2`,
-`C3_BudapestHotel\C3_1`, `C4_ColombianRainforest\C4_1..C4_3`,
-`C5_Sanitarium\C5_1/C5_2`.
-
-**Allow for the level's opening cutscene.** Each level starts with a scripted
-`CutSequence` before the player gets control. There is no skip string anywhere
-in the module, so it is on a fixed timeline rather than waiting for a key: a
-test loop should push, then wait, and only then drive the camera.
-
-1. **Get into gameplay.** Start the game, skip the intro by hand, wait for the
-   front end, then run `./tools/drive.ps1 -Scene 'C0_Training\C0_1'`. Watch the
-   log for `renderer state (before submit)` and the `startscene` line, then for
-   `max objectDrawA`. Note that `startscene -> 1` only means "command recognised"
-   - the dispatcher throws its loader's return value away, which is why the
-   virtual it calls is logged once (world `+0x59` -> `vtbl[0x44]`).
-2. If geometry never appears but the renderer's `present` counter stops while
-   `SwapBuffers` keeps counting, the engine reloaded its renderer: that is what
-   `re-arming` lines and the module load/unload history in the log are for.
-   Hooks are now re-installed automatically at the next frame boundary.
-3. Once a level loads (`objectDrawA > 0` in the log), confirm
-   `_ZCAMERA_MouseConCam` fires and with what arguments; then modify and verify
-   the camera moves. That closes the Milestone 1 gate.
-4. Milestone 2: eye loop at `0x0048F0`; recover the `glFrustum` caller for
-   asymmetric projections; leave the five 2D passes out of the per-eye loop.
-5. Install x32dbg to confirm calling conventions instead of deducing them.
+1. **Camera control** (closes the Milestone 1 gate, and the foundation for
+   Milestone 2). `_ZCAMERA_MouseConCam` is at `0x0264D0` and now fires on demand
+   after a `push:`, with a stable first argument. Find what it is called with,
+   locate the camera transform it uses, modify it from the mod, and confirm the
+   view moves. `_ZCAMERA_MainCameraControl` (`0x023940`) and `_ZCAMERA_BaseCamera`
+   (`0x020E80`) are the neighbouring candidates.
+2. **Redo the world-geometry part of the renderer map.** `objectDrawA` was wrong;
+   find the real per-object draw path so a loaded level can be detected without
+   the user's eyes.
+3. **Milestone 2.** Eye loop at `RenderOpenGL` `0x0048F0` (once per frame);
+   recover the `glFrustum` caller for asymmetric per-eye projections (Ghidra has
+   not defined the containing function - use `DecompileAt`).
+4. Install x32dbg if a calling convention ever needs confirming instead of
+   deriving (so far deriving from the machine code has been enough).

@@ -232,6 +232,30 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86) and `third_party/minhook`
 
 ## Immediate next steps
 
+### Repeatable level entry (solved 2026-10-19)
+
+```powershell
+./tools/enter-level.ps1 -BurstSeconds 0 -KeepOpen     # deploy + launch via Steam
+./tools/drive.ps1 -Scene 'push:C0_Training\C0_1'      # any time after that
+```
+
+No keyboard, no menu, no console: the game can be pushed into a level straight
+from the front end. `world->vtbl[0x88](levelName, 0, 0)` is the game's own level
+start, read out of `FUN_0fd3b609` (HitmanDlc.dlc RVA `0x7B609`), which reads the
+string property `strPreScene`, maps the `_Pre` name to the plain level name and
+then calls that slot. Verified: the training level loaded and the gameplay
+camera fired 0.6 s later.
+
+Scene names are the plain ones from the level table:
+`C0_Training\C0_1`, `C1_HongKong\C1_1..C1_4`, `C2_RotterdamHarbor\C2_1/C2_2`,
+`C3_BudapestHotel\C3_1`, `C4_ColombianRainforest\C4_1..C4_3`,
+`C5_Sanitarium\C5_1/C5_2`.
+
+**Allow for the level's opening cutscene.** Each level starts with a scripted
+`CutSequence` before the player gets control. There is no skip string anywhere
+in the module, so it is on a fixed timeline rather than waiting for a key: a
+test loop should push, then wait, and only then drive the camera.
+
 1. **Get into gameplay.** Start the game, skip the intro by hand, wait for the
    front end, then run `./tools/drive.ps1 -Scene 'C0_Training\C0_1'`. Watch the
    log for `renderer state (before submit)` and the `startscene` line, then for

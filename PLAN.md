@@ -89,6 +89,10 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       and calls that slot. Driving the slot from the mod loaded the training level with **no
       keyboard input at all**, straight from the intro screen, with the gameplay camera firing
       0.6 s later. Ask for it with `tools/drive.ps1 -Scene 'push:C0_Training\C0_1'`
+- [x] Level entry confirmed end to end by the user: the push lands exactly at the start of the
+      level, with a scripted cutscene before the player gets control. No skip string exists in
+      the module (cutscenes are `CutSequence` data on a fixed timeline), so the test loop must
+      allow time after a push before it drives the camera
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation

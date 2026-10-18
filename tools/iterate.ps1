@@ -24,10 +24,11 @@
     Remove the mod from the game directory when finished.
 
 .PARAMETER Scene
-    Scene to load automatically. Written to <game>\h47vr-scene.txt, which the
-    mod's console driver reads at startup and submits to the engine's own
-    command dispatcher - no keystrokes and no intro skip needed. Omit to run
-    with the driver idle.
+    One or more scenes to try, in order, one per attempt. Written to
+    <game>\h47vr-scene.txt as separate lines, which the mod's console driver
+    reads at startup and submits to the engine's own command dispatcher - no
+    keystrokes and no intro skip needed. Omit to run with the driver idle.
+    Scene names are relative paths, e.g. 'C0_Training\C0_1'.
 
 .PARAMETER SettleSeconds
     How long to watch the log for a verdict (world geometry appearing, or the
@@ -45,7 +46,7 @@ param(
     [string]$Configuration = 'Release',
     [int]$TimeoutSeconds = 90,
     [int]$SettleSeconds = 45,
-    [string]$Scene,
+    [string[]]$Scene,
     [switch]$SkipBuild,
     [switch]$CloseGame,
     [switch]$UninstallAfter
@@ -120,7 +121,7 @@ if (Test-Path -LiteralPath $manifestPath) {
 $sceneFile = Join-Path $GameDir 'h47vr-scene.txt'
 if ($Scene) {
     Set-Content -LiteralPath $sceneFile -Value $Scene -Encoding ascii
-    Write-Host "  scene request: $Scene"
+    Write-Host ("  scene requests: {0}" -f ($Scene -join ', '))
 } elseif (Test-Path -LiteralPath $sceneFile) {
     Remove-Item -LiteralPath $sceneFile -Force
     Write-Host '  removed a stale scene request'

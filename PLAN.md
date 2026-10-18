@@ -30,8 +30,12 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       from the machine code (`__thiscall`, two stack arguments, `ret 8`), not from the
       decompiler; `self` is the `Globals.dll` interface singleton at RVA `0x3010`
 - [~] In-process console driver: submits `startscene <scene>` to that dispatcher from the
-      presentation hook, so a level loads without synthesising keystrokes (built; one run
-      pending)
+      presentation hook, so a level loads without synthesising keystrokes. First run proved
+      the path end to end (`g_pSysInterface` rva `0x3010` matched, dispatcher hooked at
+      `0FFAE590`, `startscene C0_1 -> 1`, world object non-null) but rendered no geometry,
+      because the scene name was wrong
+- [x] Scene naming resolved from the game's own level-select table in `HitmanDlc.dlc`: names
+      are relative paths with no extension (`C0_Training\C0_1`), not bare `C0_1`
 - [x] First real detours in the shipping build: `gdi32!SwapBuffers` (firing, frames counted)
       and `_ZCAMERA_MouseConCam` (installed at RVA `0x0264D0`)
 - [x] Renderer map: GL import call-site analysis (`tools/ghidra/DumpReferences.java`) plus

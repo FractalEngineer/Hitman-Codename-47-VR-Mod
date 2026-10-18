@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
+#include <vector>
 
 // Defined by renderer_probe.cpp. Entry 2 counts world-geometry draws
 // (glDrawElements with a model matrix), which stay at zero until a level is
@@ -44,6 +45,9 @@ constexpr const char* kStartSceneCommand = "startscene";
 // scene name to, so that really is the field offset.
 constexpr int kWorldFieldOffset = 0x59;
 
+// ...and `call [eax+0x44]` on that object's vtable, i.e. slot 17.
+constexpr int kWorldLoadSlot = 0x44 / 4;
+
 // The intro videos and the menu take a few seconds to settle before a scene
 // load is accepted, and the game sometimes gives up on the front end after
 // 16-30 s, so retry across that whole window rather than at a single moment.
@@ -66,11 +70,13 @@ std::atomic<bool> g_hooked{false};
 std::atomic<unsigned long> g_command_lines{0};
 std::atomic<void*> g_last_self{nullptr};
 
-std::string g_scene;
-bool g_have_scene = false;
+// Candidates are tried in order, one per attempt, because the scene name is a
+// relative path and getting it wrong fails silently.
+std::vector<std::string> g_scenes;
 unsigned int g_attempts = 0;
 unsigned long g_next_attempt_frame = kFirstAttemptFrame;
 bool g_reported_load = false;
+bool g_logged_loader = false;
 
 // The interface singleton lives behind an exported data slot, so resolving the
 // symbol gives us the slot and we still have to read it.
@@ -82,7 +88,9 @@ void* InterfaceObject() {
     return *slot;
 }
 
-std::string ReadSceneRequest() {
+// One candidate per non-empty line. '#' starts a comment.
+std::vector<std::string> ReadSceneRequest() {
+    std::vector<std::string> scenes;
     const std::wstring path = JoinPath(mod::GameDirectory(), L"h47vr-scene.txt");
     if (FileExists(path)) {
         std::ifstream file(path);
@@ -100,16 +108,20 @@ std::string ReadSceneRequest() {
             if (line == "none" || line == "off") {
                 return {};
             }
-            return line;
+            scenes.push_back(line);
         }
+    }
+
+    if (!scenes.empty()) {
+        return scenes;
     }
 
     char buffer[MAX_PATH]{};
     const DWORD length = ::GetEnvironmentVariableA("H47VR_SCENE", buffer, MAX_PATH);
     if (length > 0 && length < MAX_PATH) {
-        return std::string(buffer, length);
+        scenes.push_back(std::string(buffer, length));
     }
-    return {};
+    return scenes;
 }
 
 // Every console or config line the engine executes lands here, so a typed
@@ -194,12 +206,14 @@ void ObserveCommand(void* self, const char* name, const char* arg) {
 }
 
 bool ConsoleDriverInstall() {
-    g_scene = ReadSceneRequest();
-    g_have_scene = !g_scene.empty();
+    g_scenes = ReadSceneRequest();
 
-    if (g_have_scene) {
-        H47VR_LOG_INFO("console driver: scene request '%s' (first attempt at frame %lu)",
-                       g_scene.c_str(), kFirstAttemptFrame);
+    if (!g_scenes.empty()) {
+        H47VR_LOG_INFO("console driver: %u scene candidate(s), first attempt at frame %lu",
+                       static_cast<unsigned>(g_scenes.size()), kFirstAttemptFrame);
+        for (const std::string& scene : g_scenes) {
+            H47VR_LOG_INFO("  candidate: '%s'", scene.c_str());
+        }
     } else {
         H47VR_LOG_INFO("console driver: no scene requested "
                        "(write h47vr-scene.txt or set H47VR_SCENE to enable)");
@@ -210,7 +224,7 @@ bool ConsoleDriverInstall() {
 }
 
 void ConsoleDriverPump(unsigned long frame) {
-    if (!g_have_scene || h47vr_command_trampoline == nullptr) {
+    if (g_scenes.empty() || h47vr_command_trampoline == nullptr) {
         return;
     }
 
@@ -219,8 +233,7 @@ void ConsoleDriverPump(unsigned long frame) {
     if (h47vr_render_counts[2] != 0) {
         if (!g_reported_load) {
             g_reported_load = true;
-            H47VR_LOG_INFO("console driver: world geometry is rendering - '%s' loaded",
-                           g_scene.c_str());
+            H47VR_LOG_INFO("console driver: world geometry is rendering");
         }
         return;
     }
@@ -238,14 +251,29 @@ void ConsoleDriverPump(unsigned long frame) {
         return;
     }
 
-    h47vr_command_self = self;
-    // The startscene branch refuses to do anything unless the world object at
-    // the interface's +0x59 is already constructed, and it reports that as a
-    // plain 0 with no message. Log it so a refused attempt is diagnosable.
+    // The dispatcher hands the scene name to `(*(self+0x59))->vtbl[0x44]`. Log
+    // where that virtual lives once, so the loader itself can be studied
+    // without guessing: the dispatcher discards its return value.
     void* world = *reinterpret_cast<void**>(reinterpret_cast<char*>(self) + kWorldFieldOffset);
-    const int result = h47vr_invoke_command(kStartSceneCommand, g_scene.c_str());
+    if (!g_logged_loader && world != nullptr) {
+        g_logged_loader = true;
+        void** vtable = *reinterpret_cast<void***>(world);
+        auto* loader = vtable[kWorldLoadSlot];
+        unsigned long long loaderOffset = 0;
+        if (ModuleOffset(loader, L"HitmanDlc.dlc", loaderOffset)) {
+            H47VR_LOG_INFO("console driver: world vtbl %p, load virtual %p = %s rva 0x%06llX",
+                           vtable, loader, "HitmanDlc.dlc", loaderOffset);
+        } else {
+            H47VR_LOG_INFO("console driver: world vtbl %p, load virtual %p in %s",
+                           vtable, loader, Narrow(ModuleContaining(loader)).c_str());
+        }
+    }
+
+    const std::string& scene = g_scenes[(g_attempts - 1) % g_scenes.size()];
+    h47vr_command_self = self;
+    const int result = h47vr_invoke_command(kStartSceneCommand, scene.c_str());
     H47VR_LOG_INFO("console driver: 'startscene %s' -> %d (attempt %u, frame %lu, self=%p, world=%p)",
-                   g_scene.c_str(), result, g_attempts, frame, self, world);
+                   scene.c_str(), result, g_attempts, frame, self, world);
 }
 
 }  // namespace h47vr

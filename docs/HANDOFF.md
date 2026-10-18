@@ -79,8 +79,18 @@ What has been tried and failed:
 
 What is known statically:
 
-- The training scene is `C0_Training\C0_1.zip`, so the scene name is likely
-  **`C0_1`** (not `C0_Training`, which is only the directory).
+- Scene names are **relative paths without the extension**. `HitmanDlc.dlc`
+  holds the level-select table right next to `StateSelectLevel`:
+
+  ```
+  0x2299A0 C1_HongKong\C1_1
+  0x2299B4 C0_Training\C0_1      <- training, the entry this project needs
+  ```
+
+  so the argument is `C0_Training\C0_1`, resolving to `C0_Training\C0_1.zip`. A
+  second table at `0x2275xx` holds the bare names (`C0_1`, `C1_1`, ...) used to
+  build the `_Pre` pre-scene variants, which is why bare `C0_1` looked right and
+  was not.
 - Console dispatcher: `System.dll` RVA **`0xE590`**, signature
   `__thiscall(void* this, char* commandLine, void* param2)`. The `startscene`
   branch calls a virtual function: `(vtbl+0x44)(2, param2, 0)`.

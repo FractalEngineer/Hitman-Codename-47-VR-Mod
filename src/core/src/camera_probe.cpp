@@ -35,6 +35,11 @@ constexpr unsigned long kCameraUpdateRva = 0x00096120;
 extern "C" void* h47vr_camera_trampoline = nullptr;
 extern "C" void* h47vr_camera_args_target = nullptr;
 
+extern "C" void* h47vr_update_trampoline = nullptr;
+extern "C" void* h47vr_update_args_target = nullptr;
+// ECX at entry to CamUpdate, saved before anything else can touch it.
+extern "C" void* h47vr_update_ecx = nullptr;
+
 std::atomic<void*> g_camera{nullptr};
 std::atomic<unsigned long> g_calls{0};
 std::wstring g_gate;
@@ -68,6 +73,28 @@ extern "C" __declspec(naked) void h47vr_detour_camera_transform() {
         popad
         popfd
         jmp dword ptr [h47vr_camera_trampoline]
+    }
+}
+
+// CamUpdate takes its object in ECX and two more arguments on the stack. ECX is
+// saved first, before pushad can hide it, and the thunk still tail-jumps to the
+// original bytes so the calling convention stays the engine's problem.
+extern "C" __declspec(naked) void h47vr_detour_camera_update() {
+    __asm {
+        mov dword ptr [h47vr_update_ecx], ecx
+        pushfd
+        pushad
+        // After pushfd+pushad: eflags at [esp+32], return address at [esp+36],
+        // the first stack argument at [esp+40] and the second at [esp+44].
+        // Pushing [esp+44] twice walks them out in reverse order.
+        push dword ptr [esp+44]
+        push dword ptr [esp+44]
+        push dword ptr [h47vr_update_ecx]
+        call dword ptr [h47vr_update_args_target]
+        add esp, 12
+        popad
+        popfd
+        jmp dword ptr [h47vr_update_trampoline]
     }
 }
 
@@ -131,6 +158,27 @@ void ObserveCameraTransform(void* a1, void* a2, void* a3, void* a4) {
     }
 }
 
+std::atomic<unsigned long> g_update_calls{0};
+bool g_update_dumped = false;
+
+void ObserveCameraUpdate(void* self, void* a1, void* a2) {
+    const unsigned long call = ++g_update_calls;
+    if (call <= 6) {
+        H47VR_LOG_INFO("cam update #%lu self(ecx)=%p arg1=%p arg2=%p",
+                       call, self, a1, a2);
+    }
+    if (g_update_dumped) {
+        return;
+    }
+    if (Readable(self, 0x40)) {
+        g_update_dumped = true;
+        DumpCamera(self, "CamUpdate ECX");
+    } else if (Readable(a1, 0x40)) {
+        g_update_dumped = true;
+        DumpCamera(a1, "CamUpdate first argument");
+    }
+}
+
 }  // namespace
 
 void* CameraProbeObject() {
@@ -156,6 +204,17 @@ bool CameraProbeInstall() {
     }
     H47VR_LOG_INFO("hooked camera transform HitmanDlc.dlc rva 0x%06lX at %p",
                    kCameraTransformRva, target);
+
+    h47vr_update_args_target = reinterpret_cast<void*>(&ObserveCameraUpdate);
+    void* update = reinterpret_cast<char*>(gameplay) + kCameraUpdateRva;
+    if (!HookAddress(update, reinterpret_cast<void*>(&h47vr_detour_camera_update),
+                     &h47vr_update_trampoline)) {
+        H47VR_LOG_ERROR("camera probe: could not hook CamUpdate rva 0x%06lX at %p",
+                        kCameraUpdateRva, update);
+        return true;  // the other hook is up; not fatal
+    }
+    H47VR_LOG_INFO("hooked CamUpdate HitmanDlc.dlc rva 0x%06lX at %p",
+                   kCameraUpdateRva, update);
     return true;
 }
 

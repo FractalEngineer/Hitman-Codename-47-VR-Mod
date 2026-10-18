@@ -525,6 +525,27 @@ int StackSamplingEnabled(int& samples) {
     return samples++;
 }
 
+// True when the bytes in front of `address` decode as a call, which is what a
+// genuine return address has. A plain scan for module-shaped values picks up
+// stale stack contents too, and that is how an earlier run produced a confident
+// but wrong call chain.
+bool LooksLikeCallReturn(const void* address) {
+    const auto* p = reinterpret_cast<const unsigned char*>(address);
+    if (p[-5] == 0xE8) {
+        return true;  // call rel32
+    }
+    if (p[-6] == 0xFF && ((p[-5] >> 3) & 7) == 2) {
+        return true;  // call [disp32]
+    }
+    if (p[-3] == 0xFF && ((p[-2] >> 3) & 7) == 2) {
+        return true;  // call [register+disp8]
+    }
+    if (p[-2] == 0xFF && ((p[-1] >> 3) & 7) == 2) {
+        return true;  // call register
+    }
+    return false;
+}
+
 void DumpStack(const char* why, int index) {
     // The return address of this call sits in the engine, and the frames above
     // it are the engine's own. Reading upward through the stack is safe: it is
@@ -533,20 +554,35 @@ void DumpStack(const char* why, int index) {
     H47VR_LOG_INFO("stack sample %d (%s):", index, why);
 
     int printed = 0;
-    for (int i = 0; i < 220 && printed < 40; ++i) {
+    int rejected = 0;
+    for (int i = 0; i < 260 && printed < 40; ++i) {
         const void* value = frame[i];
         if (value == nullptr) {
             continue;
         }
         unsigned long long offset = 0;
+        const wchar_t* module = nullptr;
         if (ModuleOffset(value, L"HitmanDlc.dlc", offset)) {
-            H47VR_LOG_INFO("   [%3d] %p  HitmanDlc.dlc +0x%06llX", i, value, offset);
-            ++printed;
+            module = L"HitmanDlc.dlc";
         } else if (ModuleOffset(value, L"RenderOpenGL.dll", offset)) {
-            H47VR_LOG_INFO("   [%3d] %p  RenderOpenGL.dll +0x%06llX", i, value, offset);
-            ++printed;
+            module = L"RenderOpenGL.dll";
         }
+        if (module == nullptr) {
+            continue;
+        }
+        // Only inside a module, and only where the previous bytes really decode
+        // as a call: a return address has a call instruction in front of it, and
+        // nothing else in a stack window reliably distinguishes a live frame
+        // from a stale value.
+        if (!LooksLikeCallReturn(value)) {
+            ++rejected;
+            continue;
+        }
+        H47VR_LOG_INFO("   [%3d] %p  %-18s +0x%06llX",
+                       i, value, Narrow(module).c_str(), offset);
+        ++printed;
     }
+    H47VR_LOG_INFO("   (%d stack values rejected as not call returns)", rejected);
 }
 
 void WINAPI DetourBegin(unsigned int mode) {

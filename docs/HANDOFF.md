@@ -244,11 +244,31 @@ suspected pointer: if a candidate is really one object it repeats, and if it is
 per-object it does not. `h47vr-camobj.txt` dumps the captured object's raw words,
 the same words as floats, and the 3x3 behind field `+4`.
 
-**Still missing: the engine's world-to-eye transform.** The vertices reaching
-`glVertex3fv` are eye-space and inside the frustum, so something transforms them
-on the CPU before submission and culls against its own frustum first. That is the
-function to find, and it is the same wall Milestone 2 keeps hitting: without it
-the view cannot be rotated without the culling cutting the scene away.
+**Still missing: the engine's world-to-eye transform.** Established: the
+modelview is always identity, the projection is a plain perspective with no
+rotation or translation (checked in a loaded level), and `glMultMatrixf`,
+`glPushMatrix`, `glPopMatrix`, `glRotatef` and `glScalef` are never called at
+all. So the view is applied on the CPU before submission, and the engine culls
+first. Without that transform the view cannot be rotated without the culling
+cutting the scene away.
+
+Where to look next, from call-validated stacks (see below):
+
+- **`HitmanDlc.dlc` RVA `0x96120`, `FUN_0fd56120`** is the engine frame on both
+  the `glVertex3fv` stack (`+0x96884`, sometimes `+0x940BA`) and the `glFrustum`
+  stack (`+0x964A3`). It logs `CamUpdate`, lives in `ZCamera.cpp`, and calls both
+  `GetGeomGeometry` and the camera's own virtuals. It runs once per geometry
+  group - `ECX` is a different object on every call - and its **first stack
+  argument is stable across every call** (`03A940E4` in one session), which makes
+  that the scene/render object to search for a camera.
+- `RenderOpenGL.dll` `+0x008A78` and `+0x0070ED` are the direct callers of
+  `glVertex3fv`; `+0x004483` and `+0x0292FA` sit above them in every sample.
+  `glFrustum` comes from `RenderOpenGL.dll` `+0x00346F`, `+0x02F340`,
+  `+0x028EB9`, `+0x02E2BB`.
+
+The stack scan now rejects any candidate whose preceding bytes do not decode as
+a call, which is what makes the chain above worth trusting: the earlier,
+unvalidated scan produced a plausible but wrong answer.
 
 **`FUN_0fd53c50` (RVA `0x93C50`) is not the camera, and is not on the world-to-eye
 path.** It was misread as one. Live capture of its last argument gives a

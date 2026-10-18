@@ -23,6 +23,18 @@ bool HookAddress(void* target, void* detour, void** original);
 // later. The callback runs on a worker thread, never under the loader lock.
 bool WatchModuleLoad(const wchar_t* moduleName, void (*callback)());
 
+// Same, but fires on every load of the module. Level transitions reload the
+// engine's modules, which throws away every patch, so the hooks have to be
+// re-armed rather than installed once.
+bool WatchModuleLoads(const wchar_t* moduleName, void (*callback)());
+
+// Writes out the load/unload notifications seen so far, and clears them.
+//
+// They are recorded rather than logged when they arrive because the
+// notification runs under the loader lock, where taking the logger's mutex can
+// deadlock against a thread that holds it and is waiting for the loader.
+void HooksFlushModuleEvents();
+
 // Stops watching, without shutting the hook engine down.
 void StopModuleWatch();
 

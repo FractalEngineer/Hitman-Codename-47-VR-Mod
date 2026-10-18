@@ -17,4 +17,13 @@ bool RendererProbeInstall();
 // Logs the accumulated call counts. Called from the presentation hook.
 void RendererProbeReport(unsigned long frame);
 
+// Allows the probe to be installed again, for when the renderer is reloaded
+// and the fresh mapping no longer carries the detour.
+void RendererProbeReset();
+
+// Logs the renderer's current base and whether our detour is still in place,
+// re-installing it when the module was reloaded underneath us. Called at the
+// moments that matter rather than every frame.
+void RendererProbeReportState(const char* when);
+
 }  // namespace h47vr

@@ -41,9 +41,22 @@ bool ModuleOffset(const void* address, const wchar_t* moduleName, unsigned long 
     if (module == nullptr || address == nullptr) {
         return false;
     }
+    // The base alone is not enough: an address above the base can still belong
+    // to a module mapped later. Check the image size too.
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+        return false;
+    }
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(
+        reinterpret_cast<const char*>(module) + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE ||
+        nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
+        return false;
+    }
     const auto base = reinterpret_cast<std::uintptr_t>(module);
+    const auto size = static_cast<std::uintptr_t>(nt->OptionalHeader.SizeOfImage);
     const auto target = reinterpret_cast<std::uintptr_t>(address);
-    if (target < base) {
+    if (target < base || target >= base + size) {
         return false;
     }
     offset = static_cast<unsigned long long>(target - base);

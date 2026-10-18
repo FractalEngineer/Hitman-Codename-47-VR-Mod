@@ -151,8 +151,15 @@ using SwapBuffersFn = BOOL(WINAPI*)(HDC);
 SwapBuffersFn g_real_swap_buffers = nullptr;
 std::atomic<unsigned long> g_presented_frames{0};
 
+// Defined below; the presentation hook is where a module reload gets turned
+// back into live hooks, because that is a frame boundary on the engine's thread.
+void ApplyReinstall();
+
 BOOL WINAPI HookSwapBuffers(HDC device) {
     const unsigned long frame = ++g_presented_frames;
+    // Frame boundary: safe to patch code, and the only place a module reload
+    // can be turned back into live hooks.
+    ApplyReinstall();
     if (frame == 1) {
         // Safe place to patch renderer code: it is fully loaded and running by
         // the time the first frame is presented.
@@ -167,6 +174,7 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
         H47VR_LOG_INFO("presented frame %lu", frame);
     }
     if (frame % 120 == 0) {
+        HooksFlushModuleEvents();
         RendererProbeReport(frame);
     }
     return g_real_swap_buffers(device);
@@ -204,6 +212,42 @@ void InstallGameplayHooks() {
     HookSymbol(L"HitmanDlc.dlc", "_ZCAMERA_MouseConCam",
                reinterpret_cast<void*>(&HookMouseConCam),
                reinterpret_cast<void**>(&g_real_mouse_con_cam));
+}
+
+// Level transitions reload the engine's modules, and a reloaded module is fresh
+// memory with no patches in it. Anything installed by address has to be
+// re-installed, or the mod goes quiet for the rest of the session without
+// saying why.
+//
+// The loader notification runs on a worker thread, and patching code that the
+// render thread may be executing is not safe from there, so it only raises a
+// flag: the work happens at the next frame boundary.
+std::atomic<bool> g_need_reinstall{false};
+
+void RequestReinstall() {
+    g_need_reinstall = true;
+}
+
+void ApplyReinstall() {
+    if (!g_need_reinstall.exchange(false)) {
+        return;
+    }
+
+    const HMODULE gameplay = LoadedModule(L"HitmanDlc.dlc");
+    const HMODULE renderer = LoadedModule(L"RenderOpenGL.dll");
+    H47VR_LOG_INFO("re-arming: HitmanDlc.dlc base %p, RenderOpenGL.dll base %p",
+                   gameplay, renderer);
+
+    if (gameplay != nullptr) {
+        InstallGameplayHooks();
+    }
+    if (renderer != nullptr) {
+        RendererProbeReset();
+        RendererProbeInstall();
+    }
+    if (LoadedModule(L"System.dll") != nullptr) {
+        ConsoleDriverRearm();
+    }
 }
 
 void InstallRendererHooks() {
@@ -277,7 +321,9 @@ bool Initialize(const char* trigger) {
     InstallRendererHooks();
     InstallConsoleCapture();
     ConsoleDriverInstall();
-    WatchModuleLoad(L"HitmanDlc.dlc", &InstallGameplayHooks);
+    WatchModuleLoads(L"HitmanDlc.dlc", &RequestReinstall);
+    WatchModuleLoads(L"RenderOpenGL.dll", &RequestReinstall);
+    WatchModuleLoads(L"System.dll", &RequestReinstall);
 
     H47VR_LOG_INFO(
         "milestone 1: presentation and camera interception installed; no "

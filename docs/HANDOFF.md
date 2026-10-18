@@ -130,6 +130,19 @@ engine executes, which is how a typed command can be observed) and can submit a
 ./tools/iterate.ps1 -Scene C0_1 -CloseGame
 ```
 
+**That scheduled path fires too early and is now only a fallback.** The game does
+not reach its menu by itself: the intro videos need a human ESC, so a request
+submitted from start-up always lands while the videos are still playing. The
+reliable path is `tools/drive.ps1`, which writes `<game>\h47vr-go.txt`; the mod
+polls for that file at a frame boundary, submits the scene named inside it, and
+deletes it. Run it once the game is sitting at the front end:
+
+```powershell
+./tools/drive.ps1 -Scene 'C0_Training\C0_1'
+```
+
+That means a scene name can be tried **without relaunching**.
+
 MSVC rejects `__thiscall` on free functions, so the driver uses naked thunks:
 a detour that preserves every register and tail-jumps to the MinHook
 trampoline, and an invoke thunk that loads `ECX` and jumps to the same
@@ -219,14 +232,19 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86) and `third_party/minhook`
 
 ## Immediate next steps
 
-1. **Get into gameplay.** The dispatcher ABI is resolved and the mod now drives
-   it directly: run `./tools/iterate.ps1 -Scene C0_1` and read the summary. Success
-   is `max objectDrawA > 0`. If the scene name is rejected the dispatcher returns
-   0 and logs "Unrecognized command"; if it is accepted but nothing renders,
-   check whether `g_pSysInterface` was still null at the attempt.
-2. Once a level loads (`objectDrawA > 0` in the log), confirm
+1. **Get into gameplay.** Start the game, skip the intro by hand, wait for the
+   front end, then run `./tools/drive.ps1 -Scene 'C0_Training\C0_1'`. Watch the
+   log for `renderer state (before submit)` and the `startscene` line, then for
+   `max objectDrawA`. Note that `startscene -> 1` only means "command recognised"
+   - the dispatcher throws its loader's return value away, which is why the
+   virtual it calls is logged once (world `+0x59` -> `vtbl[0x44]`).
+2. If geometry never appears but the renderer's `present` counter stops while
+   `SwapBuffers` keeps counting, the engine reloaded its renderer: that is what
+   `re-arming` lines and the module load/unload history in the log are for.
+   Hooks are now re-installed automatically at the next frame boundary.
+3. Once a level loads (`objectDrawA > 0` in the log), confirm
    `_ZCAMERA_MouseConCam` fires and with what arguments; then modify and verify
    the camera moves. That closes the Milestone 1 gate.
-3. Milestone 2: eye loop at `0x0048F0`; recover the `glFrustum` caller for
+4. Milestone 2: eye loop at `0x0048F0`; recover the `glFrustum` caller for
    asymmetric projections; leave the five 2D passes out of the per-eye loop.
-4. Install x32dbg to confirm calling conventions instead of deducing them.
+5. Install x32dbg to confirm calling conventions instead of deducing them.

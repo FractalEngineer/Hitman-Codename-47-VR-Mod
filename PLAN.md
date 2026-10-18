@@ -36,6 +36,15 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       because the scene name was wrong
 - [x] Scene naming resolved from the game's own level-select table in `HitmanDlc.dlc`: names
       are relative paths with no extension (`C0_Training\C0_1`), not bare `C0_1`
+- [x] On-demand scene trigger (`h47vr-go.txt`): the mod submits `startscene` whenever the file
+      appears, which is the only way to fire at a moment a player can recognise, because the
+      intro videos have to be skipped by hand (`tools/drive.ps1` writes it)
+- [x] Hook re-arm after a module reload: level transitions reload the engine's modules, which
+      discards every patch, so module loads now raise a flag and the frame boundary re-installs
+- [x] Module load/unload history recorded under the loader lock and flushed from the render
+      thread, so a reload shows up in the log instead of looking like a silent stall
+- [x] Synthetic input carries hardware scan codes (DirectInput-era games ignore key events that
+      only carry a virtual key, which is why the ESC burst kept doing nothing)
 - [x] First real detours in the shipping build: `gdi32!SwapBuffers` (firing, frames counted)
       and `_ZCAMERA_MouseConCam` (installed at RVA `0x0264D0`)
 - [x] Renderer map: GL import call-site analysis (`tools/ghidra/DumpReferences.java`) plus
@@ -120,6 +129,11 @@ Gate: positional parallax, stable world scale, unchanged simulation speed in tra
 - [x] Ghidra pass over the binaries (`HitmanDlc.dlc`, `System.dll`, `Globals.dll`,
       `EngineData.dll`, `RenderOpenGL.dll` analysed; 190 anchors and 1927 references
       in the gameplay module)
+- [x] The game does **not** reach the menu by itself: the intro videos need a human ESC. A
+      scene request submitted on a frame schedule always lands during the videos, which is why
+      the mod now fires on demand (`h47vr-go.txt`) instead
+- [x] Level transitions reload the engine's modules, discarding every patch installed by
+      address; hooks have to be re-armed after a load, not installed once
 
 ## Recommendation and Feasibility
 

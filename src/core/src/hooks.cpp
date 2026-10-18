@@ -21,10 +21,46 @@ PVOID g_watch_cookie = nullptr;
 struct WatchEntry {
     std::wstring module;
     void (*callback)();
+    bool everyLoad = false;
     std::atomic<bool> fired{false};
 };
 
 std::vector<WatchEntry*> g_watch_entries;
+
+// --- module load/unload history --------------------------------------------
+//
+// Recorded under the loader lock, written out later from the render thread.
+// Only one thread (the loader) appends, so a release/acquire counter is enough.
+constexpr int kMaxModuleEvents = 128;
+constexpr int kMaxModuleName = 64;
+
+struct ModuleEvent {
+    ULONG reason;
+    void* base;
+    wchar_t name[kMaxModuleName];
+};
+
+ModuleEvent g_module_events[kMaxModuleEvents];
+std::atomic<int> g_module_event_count{0};
+
+void RecordModuleEvent(ULONG reason, const std::wstring& name, void* base) {
+    const int index = g_module_event_count.load(std::memory_order_relaxed);
+    if (index >= kMaxModuleEvents) {
+        return;
+    }
+    ModuleEvent& event = g_module_events[index];
+    event.reason = reason;
+    event.base = base;
+    const int length = static_cast<int>(name.size() < kMaxModuleName - 1
+                                            ? name.size() : kMaxModuleName - 1);
+    for (int i = 0; i < length; ++i) {
+        event.name[i] = name[i];
+    }
+    event.name[length] = L'\0';
+    g_module_event_count.store(index + 1, std::memory_order_release);
+}
+
+constexpr ULONG kDllNotificationUnloaded = 2;
 
 // --- loader notification ----------------------------------------------------
 //
@@ -75,22 +111,32 @@ std::wstring BaseNameOf(const UnicodeStringLike* name) {
 }
 
 VOID CALLBACK OnDllNotification(ULONG reason, const LdrDllNotificationData* data, PVOID) {
-    if (reason != kDllNotificationLoaded || data == nullptr) {
+    if (data == nullptr) {
         return;
     }
     const std::wstring baseName = BaseNameOf(data->baseDllName);
+    RecordModuleEvent(reason, baseName, data->dllBase);
+
+    if (reason != kDllNotificationLoaded) {
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(g_mutex);
     for (WatchEntry* entry : g_watch_entries) {
         if (_wcsicmp(entry->module.c_str(), baseName.c_str()) != 0) {
             continue;
         }
-        bool expected = false;
-        if (!entry->fired.compare_exchange_strong(expected, true)) {
-            continue;
+        if (!entry->everyLoad) {
+            bool expected = false;
+            if (!entry->fired.compare_exchange_strong(expected, true)) {
+                continue;
+            }
         }
         H47VR_LOG_INFO("module loaded: %s - running deferred hooks",
                        Narrow(baseName).c_str());
+        // The log line above is emitted from the loader-notification thread.
+        // It is the pre-existing behaviour and has been stable in practice, but
+        // everything heavier stays on the worker thread below.
         PendingCallback* pending = new PendingCallback{entry->callback};
         HANDLE thread = ::CreateThread(nullptr, 0, &RunDeferredCallback, pending, 0, nullptr);
         if (thread != nullptr) {
@@ -139,6 +185,20 @@ bool HookAddress(void* target, void* detour, void** original) {
     }
 
     const MH_STATUS created = MH_CreateHook(target, detour, original);
+    if (created == MH_ERROR_ALREADY_CREATED) {
+        // The module was unloaded and loaded again, so the fresh mapping has the
+        // original bytes back while MinHook still holds the record. Re-apply the
+        // patch; the trampoline is still valid because the base did not move.
+        MH_DisableHook(target);
+        const MH_STATUS reapplied = MH_EnableHook(target);
+        if (reapplied != MH_OK) {
+            H47VR_LOG_ERROR("MH_EnableHook(%p) after reload failed (%d)", target,
+                            static_cast<int>(reapplied));
+            return false;
+        }
+        H47VR_LOG_INFO("re-applied hook at %p after a module reload", target);
+        return true;
+    }
     if (created != MH_OK) {
         H47VR_LOG_ERROR("MH_CreateHook(%p) failed (%d)", target, static_cast<int>(created));
         return false;
@@ -165,7 +225,9 @@ bool HookSymbol(const wchar_t* moduleName, const char* symbol, void* detour, voi
     return true;
 }
 
-bool WatchModuleLoad(const wchar_t* moduleName, void (*callback)()) {
+namespace {
+
+bool WatchModule(const wchar_t* moduleName, void (*callback)(), bool everyLoad) {
     if (moduleName == nullptr || callback == nullptr) {
         return false;
     }
@@ -191,10 +253,37 @@ bool WatchModuleLoad(const wchar_t* moduleName, void (*callback)()) {
         g_watch_cookie = cookie;
     }
 
-    WatchEntry* entry = new WatchEntry{moduleName, callback};
+    WatchEntry* entry = new WatchEntry{moduleName, callback, everyLoad, false};
     g_watch_entries.push_back(entry);
-    H47VR_LOG_INFO("watching for module load: %s", Narrow(moduleName).c_str());
+    H47VR_LOG_INFO("watching for module %s: %s",
+                   everyLoad ? "loads" : "load", Narrow(moduleName).c_str());
     return true;
+}
+
+}  // namespace
+
+bool WatchModuleLoad(const wchar_t* moduleName, void (*callback)()) {
+    return WatchModule(moduleName, callback, false);
+}
+
+bool WatchModuleLoads(const wchar_t* moduleName, void (*callback)()) {
+    return WatchModule(moduleName, callback, true);
+}
+
+void HooksFlushModuleEvents() {
+    const int count = g_module_event_count.load(std::memory_order_acquire);
+    if (count <= 0) {
+        return;
+    }
+    for (int i = 0; i < count; ++i) {
+        const ModuleEvent& event = g_module_events[i];
+        const char* what = event.reason == kDllNotificationLoaded ? "load"
+                         : event.reason == kDllNotificationUnloaded ? "unload"
+                                                                   : "other";
+        H47VR_LOG_INFO("module %-6s %-24s base %p", what,
+                       Narrow(std::wstring(event.name)).c_str(), event.base);
+    }
+    g_module_event_count.store(0, std::memory_order_release);
 }
 
 void StopModuleWatch() {

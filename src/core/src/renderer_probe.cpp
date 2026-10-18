@@ -95,9 +95,10 @@ bool RendererProbeInstall() {
     int installed = 0;
     for (int i = 0; i < 4; ++i) {
         void* target = reinterpret_cast<void*>(base + kTargets[i].rva);
-        void* trampoline = nullptr;
-        if (HookAddress(target, detours[i], &trampoline)) {
-            h47vr_render_trampolines[i] = trampoline;
+        // Hook straight into the stored slot: on a re-install after a module
+        // reload MinHook reports the hook as already created and leaves the
+        // trampoline untouched, so it must not be cleared first.
+        if (HookAddress(target, detours[i], &h47vr_render_trampolines[i])) {
             ++installed;
             H47VR_LOG_INFO("hooked renderer %-52s rva 0x%06lX at %p",
                            kTargets[i].label, kTargets[i].rva, target);
@@ -119,6 +120,34 @@ void RendererProbeReport(unsigned long frame) {
                    frame,
                    h47vr_render_counts[0], h47vr_render_counts[1],
                    h47vr_render_counts[2], h47vr_render_counts[3]);
+}
+
+void RendererProbeReset() {
+    g_installed = false;
+}
+
+void RendererProbeReportState(const char* when) {
+    HMODULE renderer = LoadedModule(L"RenderOpenGL.dll");
+    if (renderer == nullptr) {
+        H47VR_LOG_WARN("renderer state (%s): RenderOpenGL.dll is not loaded", when);
+        return;
+    }
+
+    // MinHook patches the entry with a relative jump. Reading that byte back is
+    // the only way to tell whether the module was unmapped and remapped, which
+    // silently discards the patch.
+    const auto* entry = reinterpret_cast<const unsigned char*>(renderer) + kTargets[0].rva;
+    const unsigned char first = *entry;
+    const bool patched = first == 0xE9;
+    H47VR_LOG_INFO("renderer state (%s): base %p, rva %06lX first byte 0x%02X (%s)",
+                   when, renderer, kTargets[0].rva, first,
+                   patched ? "patched" : "original - the hook is gone");
+
+    if (!patched) {
+        H47VR_LOG_WARN("renderer detour was lost (module reloaded); reinstalling");
+        RendererProbeReset();
+        RendererProbeInstall();
+    }
 }
 
 }  // namespace h47vr

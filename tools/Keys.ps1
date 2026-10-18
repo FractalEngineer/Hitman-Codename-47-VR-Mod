@@ -41,18 +41,30 @@ public static class H47Input {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern short VkKeyScan(char ch);
+    [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
     const uint KEYEVENTF_KEYUP = 0x0002;
+    const uint KEYEVENTF_SCANCODE = 0x0008;
 
     public static int StructSize() { return Marshal.SizeOf(typeof(INPUT)); }
+
+    // Games of this era read hardware scan codes through DirectInput, so an
+    // event that carries only a virtual key is ignored by the game even though
+    // GetAsyncKeyState reports the key as down. That is exactly the signature we
+    // hit: keys proven to arrive, game acting as if nothing was pressed.
+    static void Fill(ref KEYBDINPUT ki, ushort vk, bool up) {
+        ki.wVk = vk;
+        ki.wScan = (ushort)MapVirtualKey(vk, 0);
+        ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0);
+    }
 
     public static void Tap(ushort vk, bool shift) {
         var a = new INPUT[shift ? 4 : 2];
         int i = 0;
-        if (shift) { a[i].type = 1; a[i].u.ki.wVk = 0x10; i++; }
-        a[i].type = 1; a[i].u.ki.wVk = vk; i++;
-        a[i].type = 1; a[i].u.ki.wVk = vk; a[i].u.ki.dwFlags = KEYEVENTF_KEYUP; i++;
-        if (shift) { a[i].type = 1; a[i].u.ki.wVk = 0x10; a[i].u.ki.dwFlags = KEYEVENTF_KEYUP; i++; }
+        if (shift) { a[i].type = 1; Fill(ref a[i].u.ki, 0x10, false); i++; }
+        a[i].type = 1; Fill(ref a[i].u.ki, vk, false); i++;
+        a[i].type = 1; Fill(ref a[i].u.ki, vk, true); i++;
+        if (shift) { a[i].type = 1; Fill(ref a[i].u.ki, 0x10, true); i++; }
 
         uint sent = SendInput((uint)a.Length, a, Marshal.SizeOf(typeof(INPUT)));
         if (sent != (uint)a.Length) {

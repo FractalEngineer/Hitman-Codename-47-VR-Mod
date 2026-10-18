@@ -16,6 +16,9 @@ namespace h47vr {
 // and the game behaves like an unmodified install.
 bool ConsoleDriverInstall();
 
+// Re-installs the dispatcher hook after its module was reloaded.
+bool ConsoleDriverRearm();
+
 // Called from the presentation hook, on the engine's own thread, once per
 // presented frame. Issues the pending scene load and reports what happened.
 void ConsoleDriverPump(unsigned long frame);

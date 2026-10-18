@@ -41,6 +41,10 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       intro videos have to be skipped by hand (`tools/drive.ps1` writes it)
 - [x] Hook re-arm after a module reload: level transitions reload the engine's modules, which
       discards every patch, so module loads now raise a flag and the frame boundary re-installs
+- [x] Scene-entry probe: `EngineData.dll` RVA `0xEF60` is `world->vtbl[0x44]`, the entry the
+      console `startscene` command calls (`__thiscall(object, mode, arg1, arg2)`), and the
+      dispatcher throws its result away - so this is the only place the engine's own opinion
+      about a scene request is observable. Logs every call, marking the mod's own
 - [x] Module load/unload history recorded under the loader lock and flushed from the render
       thread, so a reload shows up in the log instead of looking like a silent stall
 - [x] Synthetic input carries hardware scan codes (DirectInput-era games ignore key events that

@@ -6,6 +6,7 @@ add_library(h47vr_core STATIC
     src/symbols.cpp
     src/hooks.cpp
     src/renderer_probe.cpp
+    src/scene_probe.cpp
     src/mod.cpp)
 
 target_include_directories(h47vr_core PUBLIC include)

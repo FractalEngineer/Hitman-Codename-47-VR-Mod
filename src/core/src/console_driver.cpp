@@ -5,6 +5,7 @@
 #include "h47vr/mod.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/renderer_probe.hpp"
+#include "h47vr/scene_probe.hpp"
 #include "h47vr/symbols.hpp"
 
 #include <windows.h>
@@ -251,6 +252,7 @@ void SubmitScene(const std::string& scene, const char* why, unsigned long frame)
     }
 
     h47vr_command_self = self;
+    SceneProbeMarkOwnCall();
     const int result = h47vr_invoke_command(kStartSceneCommand, scene.c_str());
     H47VR_LOG_INFO(
         "console driver: 'startscene %s' -> %d (%s, attempt %u, frame %lu, self=%p, world=%p)",

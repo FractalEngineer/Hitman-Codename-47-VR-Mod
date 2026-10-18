@@ -6,6 +6,7 @@
 #include "h47vr/log.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/renderer_probe.hpp"
+#include "h47vr/scene_probe.hpp"
 #include "h47vr/symbols.hpp"
 #include "h47vr/version.hpp"
 
@@ -248,6 +249,9 @@ void ApplyReinstall() {
     if (LoadedModule(L"System.dll") != nullptr) {
         ConsoleDriverRearm();
     }
+    if (LoadedModule(L"EngineData.dll") != nullptr) {
+        SceneProbeRearm();
+    }
 }
 
 void InstallRendererHooks() {
@@ -320,6 +324,7 @@ bool Initialize(const char* trigger) {
     HooksInitialize();
     InstallRendererHooks();
     InstallConsoleCapture();
+    SceneProbeInstall();
     ConsoleDriverInstall();
     WatchModuleLoads(L"HitmanDlc.dlc", &RequestReinstall);
     WatchModuleLoads(L"RenderOpenGL.dll", &RequestReinstall);

@@ -8,6 +8,7 @@ if (-not ('H47Input' -as [type])) {
     Add-Type @'
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 public static class H47Input {
     [StructLayout(LayoutKind.Sequential)]
@@ -58,22 +59,39 @@ public static class H47Input {
         ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0);
     }
 
-    public static void Tap(ushort vk, bool shift) {
-        var a = new INPUT[shift ? 4 : 2];
-        int i = 0;
-        if (shift) { a[i].type = 1; Fill(ref a[i].u.ki, 0x10, false); i++; }
-        a[i].type = 1; Fill(ref a[i].u.ki, vk, false); i++;
-        a[i].type = 1; Fill(ref a[i].u.ki, vk, true); i++;
-        if (shift) { a[i].type = 1; Fill(ref a[i].u.ki, 0x10, true); i++; }
-
-        uint sent = SendInput((uint)a.Length, a, Marshal.SizeOf(typeof(INPUT)));
-        if (sent != (uint)a.Length) {
-            throw new Exception("SendInput accepted " + sent + " of " + a.Length +
+    static void Send(INPUT[] batch) {
+        uint sent = SendInput((uint)batch.Length, batch, Marshal.SizeOf(typeof(INPUT)));
+        if (sent != (uint)batch.Length) {
+            throw new Exception("SendInput accepted " + sent + " of " + batch.Length +
                                 " inputs (error " + Marshal.GetLastWin32Error() + ")");
         }
     }
 
-    public static void Key(ushort vk) { Tap(vk, false); }
+    // Key down and key up go out in separate calls with a real gap between them.
+    // Sending both in one burst is the same as a press that lasts zero
+    // milliseconds, and a game that samples the keyboard once per frame can
+    // never see it - it polls after the key is already up again.
+    public static void Tap(ushort vk, bool shift, int holdMs) {
+        int size = shift ? 2 : 1;
+
+        var down = new INPUT[size];
+        int i = 0;
+        if (shift) { down[i].type = 1; Fill(ref down[i].u.ki, 0x10, false); i++; }
+        down[i].type = 1; Fill(ref down[i].u.ki, vk, false); i++;
+        Send(down);
+
+        if (holdMs > 0) { Thread.Sleep(holdMs); }
+
+        var up = new INPUT[size];
+        i = 0;
+        if (shift) { up[i].type = 1; Fill(ref up[i].u.ki, 0x10, true); i++; }
+        up[i].type = 1; Fill(ref up[i].u.ki, vk, true); i++;
+        Send(up);
+    }
+
+    public static void Tap(ushort vk, bool shift) { Tap(vk, shift, 60); }
+
+    public static void Key(ushort vk) { Tap(vk, false, 60); }
 
     public static void Text(string s) {
         foreach (char c in s) {

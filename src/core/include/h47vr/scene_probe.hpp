@@ -20,4 +20,15 @@ bool SceneProbeRearm();
 // the log can tell the two apart.
 void SceneProbeMarkOwnCall();
 
+// Calls the scene entry directly, with the mode chosen by the caller, and
+// returns what it returns.
+//
+// This exists because the console's `startscene` command hard-codes mode 2 and
+// then throws the result away, so there is no way to ask the engine "load this
+// scene" and hear the answer. Going through the entry directly does both.
+//
+// `object` is the world object the engine passes in its own ECX, i.e.
+// `*(interface + 0x59)`.
+int SceneEntryInvoke(void* object, int mode, const char* first, const char* second);
+
 }  // namespace h47vr

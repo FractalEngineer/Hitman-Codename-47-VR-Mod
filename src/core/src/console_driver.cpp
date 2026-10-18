@@ -223,6 +223,27 @@ void InstallHook() {
                    kCommandDispatcherRva, target);
 }
 
+// Calls the scene entry the way the engine itself does, with a mode we choose,
+// and keeps the result. This is the experiment harness: the console command
+// hard-codes mode 2 and discards the answer.
+void SubmitSceneEntry(int mode, const std::string& name, unsigned long frame) {
+    void* self = InterfaceObject();
+    if (self == nullptr) {
+        H47VR_LOG_WARN("scene entry: g_pSysInterface is still null (frame %lu)", frame);
+        return;
+    }
+    void* world = *reinterpret_cast<void**>(reinterpret_cast<char*>(self) + kWorldFieldOffset);
+    if (world == nullptr) {
+        H47VR_LOG_WARN("scene entry: the world object at +0x%X is still null (frame %lu)",
+                       kWorldFieldOffset, frame);
+        return;
+    }
+
+    const int result = SceneEntryInvoke(world, mode, name.c_str(), nullptr);
+    H47VR_LOG_INFO("console driver: scene entry mode=%d name='%s' -> %d (frame %lu, world=%p)",
+                   mode, name.c_str(), result, frame, world);
+}
+
 void SubmitScene(const std::string& scene, const char* why, unsigned long frame) {
     void* self = InterfaceObject();
     if (self == nullptr) {
@@ -318,7 +339,14 @@ void ConsoleDriverPump(unsigned long frame) {
         if (!go.empty() && go != "none" && go != "off") {
             ++g_attempts;
             RendererProbeReportState("before submit");
-            SubmitScene(go, "on demand", frame);
+            // "<mode>:<name>" calls the scene entry directly with that mode,
+            // which is how the engine's own level start gets replayed. Anything
+            // else goes through the console command as before.
+            if (go.size() > 2 && go[1] == ':' && go[0] >= '0' && go[0] <= '9') {
+                SubmitSceneEntry(go[0] - '0', go.substr(2), frame);
+            } else {
+                SubmitScene(go, "on demand", frame);
+            }
             return;
         }
     }

@@ -30,7 +30,6 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$Scene,
     [string]$GameDir,
     [int]$StartDelaySeconds = 3,
@@ -77,6 +76,18 @@ $GameDir = Resolve-GameDir -Requested $GameDir
 $logDir = Join-Path $GameDir 'h47vr-logs'
 $goFile = Join-Path $GameDir 'h47vr-go.txt'
 
+# The app-local opengl32 proxy is what carries the mod, and Steam launches
+# whatever is sitting in the game directory. Without this step a launch quietly
+# runs the previous build and the new hooks are simply not in the process.
+$binDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'build/bin'
+if (Test-Path -LiteralPath (Join-Path $binDir 'opengl32.dll')) {
+    foreach ($name in @('opengl32.dll', 'h47vr_mod.dll')) {
+        Copy-Item -LiteralPath (Join-Path $binDir $name) `
+                  -Destination (Join-Path $GameDir $name) -Force
+    }
+    Write-Host 'deployed the current build'
+}
+
 if (Test-Path -LiteralPath $goFile) { Remove-Item -LiteralPath $goFile -Force }
 
 $game = Get-GameProcess
@@ -119,14 +130,16 @@ while ($clock.Elapsed.TotalSeconds -lt $burstEnd) {
 Start-Sleep -Seconds $SettleSeconds
 if (-not (Get-GameProcess)) { throw 'the game exited before the scene request could be sent' }
 
-Set-Content -LiteralPath $goFile -Value $Scene -Encoding ascii
-Write-Host ("scene request written: '{0}'" -f $Scene)
+if ($Scene) {
+    Set-Content -LiteralPath $goFile -Value $Scene -Encoding ascii
+    Write-Host ("scene request written: '{0}'" -f $Scene)
 
-for ($i = 0; $i -lt ($WatchSeconds * 2); $i++) {
-    Start-Sleep -Milliseconds 500
-    if (-not (Test-Path -LiteralPath $goFile)) { break }
+    for ($i = 0; $i -lt ($WatchSeconds * 2); $i++) {
+        Start-Sleep -Milliseconds 500
+        if (-not (Test-Path -LiteralPath $goFile)) { break }
+    }
+    Start-Sleep -Milliseconds 1500
 }
-Start-Sleep -Milliseconds 1500
 
 $log = Get-ChildItem -LiteralPath $logDir -Filter *.log -ErrorAction SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1

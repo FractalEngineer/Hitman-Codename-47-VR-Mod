@@ -57,6 +57,18 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [ ] Controllable camera: drive the camera from the mod and observe it move in a loaded level
 - [ ] Reach gameplay automatically: `objectDrawA > 0` after the console driver submits
       `startscene C0_1` (blocker for the Milestone 1 gate)
+- [x] **Gameplay reached, 2026-10-19.** The training mission loaded with a controllable
+      player at 62 FPS and `_ZCAMERA_MouseConCam` was seen firing for the first time
+      (`#1` front end, `#2` at level start) - the Milestone 1 signal this project has been
+      chasing. It fires rarely, i.e. it is camera setup rather than the per-frame update
+- [x] Corrected: `objectDrawA` (RenderOpenGL RVA `0x6590`) stays `0` while a level renders, so
+      it is **not** a world-geometry signal. That part of the renderer map has to be redone
+- [x] Corrected: the level start does **not** go through `EngineData.dll` RVA `0xEF60` - the
+      whole session produced three calls there and all three were settings (`Anisotropy`,
+      `ShadowDetail`, `TextureResolution`). The console `startscene` route is a dead end for
+      starting a level, which is why it "succeeded" and did nothing
+- [x] Direct scene-entry harness: `h47vr-go.txt` accepts `<mode>:<name>` and calls the entry
+      itself, returning the engine's own result instead of a hard-coded "recognised"
 - [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
       `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation

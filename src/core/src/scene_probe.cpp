@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cstdint>
 
 namespace h47vr {
 namespace {
@@ -25,6 +26,19 @@ extern "C" void* h47vr_scene_args_target = nullptr;
 
 std::atomic<bool> g_own_call{false};
 std::atomic<unsigned long> g_calls{0};
+
+// ECX carries the object, three stack arguments follow, and the target cleans
+// them itself. Same shape as the console dispatcher, so the same trick: set
+// ECX and tail-jump, and let the original `ret` do the cleanup.
+extern "C" void* h47vr_scene_self = nullptr;
+
+extern "C" __declspec(naked) int __stdcall h47vr_invoke_scene_entry(const char*, const char*,
+                                                                   const char*) {
+    __asm {
+        mov ecx, dword ptr [h47vr_scene_self]
+        jmp dword ptr [h47vr_scene_trampoline]
+    }
+}
 
 // Entry layout: [esp]=return address, [esp+4]=mode, [esp+8]=argument,
 // [esp+12]=second argument, ECX=object. Ghidra reads this as
@@ -94,6 +108,13 @@ bool SceneProbeRearm() {
 
 void SceneProbeMarkOwnCall() {
     g_own_call = true;
+}
+
+int SceneEntryInvoke(void* object, int mode, const char* first, const char* second) {
+    h47vr_scene_self = object;
+    SceneProbeMarkOwnCall();
+    return h47vr_invoke_scene_entry(reinterpret_cast<const char*>(static_cast<std::intptr_t>(mode)),
+                                    first, second);
 }
 
 }  // namespace h47vr

@@ -66,27 +66,28 @@ if (-not $proc) { throw "No game process appeared within $WindowTimeoutSeconds s
 Write-Host ("process up after {0:N0} ms (pid {1}); INPUT is {2} bytes" -f
     $clock.Elapsed.TotalMilliseconds, $proc.Id, [H47Input]::StructSize())
 
-# Burst ESC from process start through the window becoming usable, and focus the
-# window the moment it exists. Sending ESC before focusing was a real flaw: the
-# engine only acts on keys while its own window is active. ESC does nothing once
-# the menu is up, so overshooting by a few seconds is harmless.
-$burstEnd = $clock.Elapsed.TotalSeconds + 6
+# The intro videos do not start until several seconds after the process appears,
+# so a short burst misses them. Press ESC for the whole start-up window and
+# re-focus every iteration; ESC does nothing once the menu is up, so running long
+# is harmless.
+$burstSeconds = 25
+$burstEnd = $clock.Elapsed.TotalSeconds + $burstSeconds
 $focused = $false
 while ($clock.Elapsed.TotalSeconds -lt $burstEnd) {
-    if (-not $focused) {
-        $candidate = Get-GameProcess
-        if ($candidate -and $candidate.MainWindowHandle -ne 0) {
-            $focused = Focus-GameWindow -Process $candidate
-            if ($focused) {
-                Write-Host ("focused at {0:N0} ms: '{1}'" -f
-                    $clock.Elapsed.TotalMilliseconds, $candidate.MainWindowTitle)
-            }
+    $candidate = Get-GameProcess
+    if ($candidate -and $candidate.MainWindowHandle -ne 0) {
+        $now = Focus-GameWindow -Process $candidate
+        if ($now -and -not $focused) {
+            Write-Host ("focused at {0:N0} ms: '{1}'" -f
+                $clock.Elapsed.TotalMilliseconds, $candidate.MainWindowTitle)
         }
+        $focused = $focused -or $now
     }
     [H47Input]::Key(0x1B)
-    Start-Sleep -Milliseconds 150
+    Start-Sleep -Milliseconds 200
 }
-Write-Host ("ESC burst done at {0:N0} ms (focused={1})" -f
+Write-Host ("ESC burst ({0}s) done at {1:N0} ms (focused={2})" -f
+    $burstSeconds,
     $clock.Elapsed.TotalMilliseconds, $focused)
 
 $proc = Get-GameProcess

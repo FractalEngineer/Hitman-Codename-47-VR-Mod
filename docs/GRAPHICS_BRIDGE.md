@@ -26,12 +26,21 @@ Virtual Desktop OpenXR runtime, on the connected Quest.
 | --- | --- |
 | 32-bit runtime | Registered: `HKLM\SOFTWARE\WOW6432Node\Khronos\OpenXR\1` -> `virtualdesktop-openxr-32.json` |
 | Runtime DLL | `C:\Program Files\Virtual Desktop Streamer\OpenXR\virtualdesktop-openxr-32.dll` |
-| Loader | **Not installed.** No `openxr_loader.dll` in `System32` or `SysWOW64` |
+| Loader | Vendored: `third_party/openxr/lib/x86/openxr_loader.dll`, built from `release-1.1.65` |
 | SteamVR | 64-bit loader only, so it is not a fallback for a 32-bit host |
 
-The missing loader is the first practical obstacle: any test has to vendor or
-build the x86 `openxr_loader` and place it next to the mod, because the loader is
-what an application links against and it is what locates the active runtime.
+No `openxr_loader.dll` existed anywhere on the machine, in either architecture,
+which blocked the gate before anything could be tested. `tools/fetch-openxr.ps1`
+now clones the SDK at a pinned tag and builds the x86 loader with the Visual
+Studio toolchain, installing it under `third_party/openxr` together with the
+generated public headers and the import library.
+
+Verified: the vendored loader is i386 (`machine 0x014c`) and exports the expected
+entry points, including `xrCreateInstance`, `xrGetSystem`, `xrCreateSession`,
+`xrEnumerateInstanceExtensionProperties` and `xrGetInstanceProcAddr`.
+
+The mod ships this loader next to itself; it is the piece that reads the
+registry entry above and loads the active runtime.
 
 ## Test order
 

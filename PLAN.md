@@ -26,7 +26,8 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       `System.dll` (`g_pSysInput` at RVA `0x3014`, `RunEngine` at `0xA790`)
 - [ ] Deferred hook installation on module load (`LdrRegisterDllNotification`), required
       because `HitmanDlc.dlc` is not loaded when the proxy starts
-- [ ] Vendor or build the 32-bit `openxr_loader` (nothing suitable exists on this machine)
+- [x] Vendor the 32-bit `openxr_loader` (`third_party/openxr`, built from
+      `release-1.1.65` by `tools/fetch-openxr.ps1`; verified i386 with the expected exports)
 - [ ] Install x32dbg for live address and calling-convention validation
 - [ ] Vendor MinHook
 

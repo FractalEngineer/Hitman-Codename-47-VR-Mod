@@ -12,6 +12,7 @@
 /tools/_cache/
 /tools/_ghidra_out/
 /ghidra_project/
+/third_party/openxr-sdk/
 __pycache__/
 *.pyc
 *.log

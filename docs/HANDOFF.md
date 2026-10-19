@@ -334,6 +334,26 @@ object carries the crosshair at `+0x3e`/`+0x42` (clamped +/-0.5), the last
 cursor position at `+0x46`/`+0x4a` with its previous value at `+0x4e`/`+0x52`,
 `+0x5b` captured, and `+299` clip-enabled.
 
+What reads those accumulators, found with `tools/ghidra/FindScalarRefs.java`
+(scans instructions for a displacement; `DumpRefsTo` only works on addresses):
+
+- `FUN_0fce6f20` (RVA `0x26F20`) is the **MouseConCam per-frame update**. It
+  reads the crosshair through the handler id at `+0x81`, stores it at
+  `+0x85`/`+0x89`, turns it into an aim offset with a `tan` term, and copies the
+  input accumulators into its own saved copies at `+0x45`/`+0x49`/`+0x4d`.
+  `+0x65`..`+0x71` are four sine sway/bob oscillators.
+- `FUN_0fce6bc0` (RVA `0x26BC0`) is the activation/mode handler beside it; it
+  saves the same three accumulators on activation.
+- Other readers of `+0xa95`/`+0xa99`: `FUN_0fce4bb0`, `FUN_0fcee9f0`,
+  `FUN_0fceed30`, `FUN_0fd06840` (save/restore across a scene change),
+  `FUN_0fd38190`, `FUN_0fdf0c70` (player action state), `FUN_0fe26d30`, plus two
+  regions Ghidra has not defined as functions at `0x0fd45501` and `0x0fd459ad`.
+
+The crosshair is therefore the *aim*: the camera's look offset comes from its
+clamped screen position, while the player's facing comes from the integrated
+mouse delta. That is why dead-reckoned `yaw=` works without a read-back - it is
+tracking the same integral the engine uses.
+
 Front end structure: every screen is an **exported wing group**
 (`_ZWINGROUP_*`) built by a descriptor that stores a script string, a handler, a
 float and an id, and screens are switched **by name** via
@@ -489,7 +509,9 @@ Ghidra scripts in `tools/ghidra/`: `ExtractAnchors.java`, `DumpReferences.java`
 references a string), `DecompileCallers.java`, `DumpRefsTo.java` (refs to an
 address), `DecompileAt.java` (materialises a function Ghidra never defined, then
 decompiles it - this is what cracked the level start), `DumpImportCalls.java`
-(call sites of any import by name, which is how the mouse path above was found).
+(call sites of any import by name, which is how the mouse path above was found),
+`FindScalarRefs.java` (every instruction mentioning a displacement value, which
+is how the readers of `interface+0xa95` were found).
 Run:
 
 ```

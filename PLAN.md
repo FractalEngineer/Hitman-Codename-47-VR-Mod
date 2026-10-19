@@ -143,6 +143,13 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       changed the frame by 27.20 against a 1.31 control, and both a 200 px and a 450 px reversal
       returned to 4.2-5.1. What remains is that the estimate is dead reckoning, not a read-back of
       the engine's camera, so anything else that turns the player desyncs it until recentred
+- [x] **Mouse-look model mapped, 2026-10-19.** The crosshair is the aim: `MouseConCam`'s per-frame
+      update (`HitmanDlc.dlc` RVA `0x26F20`) takes the crosshair position and turns it into a look
+      offset with a `tan` term, while the player's facing follows the integrated mouse delta
+      (`g_pSysInterface + 0xa95`/`+0xa99`). That is why dead reckoning tracks the same integral the
+      engine uses. Found with the new `tools/ghidra/FindScalarRefs.java`, which searches
+      instructions for a displacement instead of an address - the earlier scripts could only
+      follow symbols, not struct fields
 - [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
       `glLoadMatrixf` in modelview is identity once per frame, and `glPushMatrix`, `glPopMatrix`,
       `glMultMatrixf`, `glRotatef` and `glScalef` are never called at all. The only matrix the GL

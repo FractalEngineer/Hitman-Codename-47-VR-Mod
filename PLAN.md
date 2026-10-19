@@ -265,6 +265,14 @@ the "camera hook" the gate asked for is not needed for it.
 
 ### Milestone 2 - correct stereo rendering
 
+- [ ] **Read the engine's camera yaw back.** It unblocks exact look calibration, an
+      absolute (not dead-reckoned) head aim, and the world-to-eye transform stereo needs. The
+      value is computed every frame in `MouseConCam`'s update (`HitmanDlc.dlc` RVA `0x26F20`)
+      in degrees, via the constants at `0x0feb17d0`..`0x0feb17d8` (360, 90, 57.29578). A
+      float scan of process memory found no stable scalar field, so expect a basis vector or
+      quaternion. `camera_probe.cpp` already hooks `CamUpdate` (`0x0fd56120`) and tracks
+      candidates. Note the input side is ready: `tools/look.ps1` turns the engine's own camera
+      with no focus and no cursor theft, so the head pose can already be injected
 - [~] Update gameplay once, then render both eyes from the same simulation state
       (frame boundary identified: `RenderOpenGL.dll` RVA `0x0048F0`, the only caller of
       `SwapBuffers`; measured at ~1 call per frame. `FUN_0fb73680` is per-pass at ~17-18

@@ -11,15 +11,29 @@ as the work**.
 
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
-Everything below is committed and pushed at `9736907`. The game is not running
-right now. It keeps rendering while you use the desktop, so a session is free to
-launch it and walk away.
+Repo state: `43d58f3` locally, `origin/main` at `f25a345` - the last three
+commits still need `git push origin HEAD`. The game may or may not be running;
+it keeps rendering while the desktop is used, so a session is free to launch it
+and walk away.
 
 ## Where things stand (2026-10-19)
 
 **The long-standing blocker is gone.** The game can be driven into a level with
 no keyboard input, and `_ZCAMERA_MouseConCam` has now been observed firing in a
 loaded level - the Milestone 1 signal this project spent weeks chasing.
+
+**The camera is now driven from inside the game, with no focus and no keyboard.**
+`h47vr-look.txt` posts `WM_MOUSEMOVE` into the engine's own queue
+(`src/core/src/look_driver.cpp`) - the same message a real mouse delivers, minus
+the operating system's routing, which is what makes focus irrelevant. The engine
+rotates its own camera and its visibility pass follows, so nothing is culled. A
+`SetCursorPos` hook swallows the engine's cursor warp, so a turn no longer steals
+the desktop pointer. A request is either relative pixels (`dx=`/`dy=`) or an
+absolute aim (`yaw=`/`pitch=`); the absolute form is dead-reckoned from the pixel
+total in `h47vr-lookstate.txt`, because the engine has no look-at entry point.
+The scale is a visual estimate of 0.09 deg/px - the three exact methods that were
+tried and failed are under "Dead ends". This is the mechanism the headset will
+drive.
 
 The game's own level start is
 
@@ -201,6 +215,15 @@ The fullscreen path at the same handler reads its own remembered cursor position
 
 # full loop: build, install, launch, watch the log, close
 ./tools/iterate.ps1 -Scene C0_1 -CloseGame
+
+# turn the engine's own camera - no focus, no synthetic input, no cursor theft
+./tools/look.ps1 -Dx 220 -Verify        # relative, in pixels
+./tools/look.ps1 -Yaw 90 -Verify        # absolute, in degrees from the start
+./tools/look.ps1 -Yaw 0                 # recentre exactly
+
+# calibration experiments (see Dead ends before using them in anger)
+python tools/calibrate-look.py before.png after.png --px 100 --region 260,150,640,330
+python tools/scan-yaw.py --pixels 100 --save tools/_shots/scan100.txt
 ```
 
 Every level is reachable: `C0_Training\C0_1`, `C1_HongKong\C1_1..C1_4`,
@@ -301,6 +324,18 @@ Two things the injected rotation cannot do, both worth remembering:
   at its call site (RVA `0x104AD`) and its prologue. It splits a line at the
   first `=` or space. `self` is `Globals.dll`'s
   `?g_pSysInterface@@3PAVZSysInterface@@A` at RVA `0x3010`.
+- **In-process camera turn, no focus.** `WM_MOUSEMOVE` posted into the engine's
+  own queue drives the same handler a real mouse does. Verified with the game in
+  the background: 15/15 messages posted, frame difference 20.2-20.5 against a
+  1.8 static control, exact reversal back to 2.4, and the log records the
+  foreground window so the claim is checkable on every run.
+- **Cursor guard.** The engine's `SetCursorPos` re-centre is swallowed when the
+  call comes from its own mouse handler (`RenderOpenGL` `0x29AC0`..`0x29E50`).
+  The swallow counter rises by exactly one per posted message; turns no longer
+  move the desktop pointer.
+- **Absolute aim.** `yaw=`/`pitch=` in degrees are turned into the pixel delta
+  that reaches them from the dead-reckoned total, which also makes `yaw=0` an
+  exact recentre at any calibration. Scale currently 0.09 deg/px (visual).
 
 ## Reverse-engineering map
 
@@ -473,6 +508,14 @@ mechanism, not as a camera finder.
 
 ## Dead ends - do not revisit
 
+- **Exact look calibration from images or from memory.** Three methods tried on
+  2026-10-19, all failed: floor-plane homography (`tools/calibrate-look.py` is
+  correct on a synthetic warp but real frames are not a plane homography - the
+  camera sways on four sine oscillators and orbits the player); tile-repeat (the
+  cell is too self-similar, no dip anywhere from 100 to 1400 px); and a float
+  scan of process memory (`tools/scan-yaw.py` - no stable field, so the yaw is a
+  basis or quaternion rather than a scalar). The exact value comes with the
+  camera read-back below; do not rebuild these.
 - **Console `startscene <name>`.** It "succeeds" (`-> 1`) and loads nothing. The
   dispatcher hard-codes `mode 2` and discards the callee's result, so the return
   value never meant anything.
@@ -574,28 +617,34 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 
 ## Immediate next steps
 
-1. **Feed head pose in continuously.** The in-process route is in and verified -
-   `h47vr-look.txt` to `WM_MOUSEMOVE` through `src/core/src/look_driver.cpp`, no
-   focus, no synthetic input - but it is still one-shot: one file write is one
-   fixed turn. The missing half is closed-loop: each frame, work out the delta
-   between where the head points and where the engine's camera points, and post
-   that. The engine's own accumulators (`g_pSysInterface + 0xa95`/`+0xa99`) and
-   the crosshair position (`renderer+0x3e`/`+0x42`) are where its current aim is
-   observable. `h47vr-cam.txt` (the GL-boundary rotation) stays a fallback for
-   the small residual a head pose adds on top.
-2. **Make it two-eyed.** The projection is set by `glFrustum` (34.52 deg fov,
-   near 5, far 16000) and by hand into a 45 deg matrix; both entries are already
-   intercepted, so stereo is a change of arguments and a second viewport rather
-   than a new hook. The per-eye offset is small, which is the regime where the
-   fallback rotation is safe - if it turns out not to be, the engine's
-   world-to-eye transform (search `RenderOpenGL.dll`, see above) is where the
-   offset belongs.
-3. **Redo the world-geometry part of the renderer map.** `objectDrawA`
+Milestone 2 starts here. The camera is driven; the question is now *reading* it
+and drawing it twice.
+
+1. **Read the engine's camera yaw.** This one piece unblocks three things at
+   once: exact look calibration, an absolute (not dead-reckoned) aim for the
+   headset, and the world-to-eye transform stereo needs. The value is computed
+   every frame: `FUN_0fce6f20` (MouseConCam per-frame, RVA `0x26F20`) produces an
+   angle in degrees using the constants at `0x0feb17d0`..`0x0feb17d8` (360, 90,
+   57.29578), so it exists - the job is finding where it lands. `camera_probe.cpp`
+   already hooks `FUN_0fd56120` (CamUpdate) and has candidate tracking; extend it
+   to watch for a rotating basis rather than a scalar angle, since the memory
+   scan proved a scalar is not there. When it reports yaw, wire it into
+   `look_driver.cpp` and real degrees replace `degperpx`.
+2. **Eye loop at the frame boundary.** `RenderOpenGL` RVA `0x0048F0` is the only
+   caller of `SwapBuffers` and runs once per frame; `0x003680` is per-pass
+   (17-22 per frame) and is the wrong place. Render both eyes from one simulation
+   update.
+3. **Two-eyed projection.** `glFrustum` (34.52 deg fov, near 5, far 16000) and
+   the hand-built 45 deg matrix are both already intercepted, so stereo is
+   arguments plus a second viewport. The per-eye offset is small, which is the
+   regime where the GL-boundary rotation is safe; if the engine's visibility pass
+   cuts it, that is the signal to move the offset into the engine transform from
+   step 1.
+4. **Redo the world-geometry part of the renderer map.** `objectDrawA`
    (RenderOpenGL RVA `0x6590`) never runs - `glPushMatrix`, `glPopMatrix` and
    `glMultMatrixf` are 0 calls - so the world path is immediate mode:
    `glBegin`/`glEnd` with ~2,900 `glVertex3fv` per frame. "The perspective
    projection is current and vertices are flowing" is a usable level signal that
    needs no eyes.
-4. **Milestone 2.** Eye loop at `RenderOpenGL` `0x0048F0` (once per frame).
 5. Install x32dbg if a calling convention ever needs confirming instead of
    deriving (so far deriving from the machine code has been enough).

@@ -29,16 +29,17 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] Console/config command dispatcher located (`System.dll` RVA `0xE590`) with its ABI read
       from the machine code (`__thiscall`, two stack arguments, `ret 8`), not from the
       decompiler; `self` is the `Globals.dll` interface singleton at RVA `0x3010`
-- [~] In-process console driver: submits `startscene <scene>` to that dispatcher from the
-      presentation hook, so a level loads without synthesising keystrokes. First run proved
-      the path end to end (`g_pSysInterface` rva `0x3010` matched, dispatcher hooked at
-      `0FFAE590`, `startscene C0_1 -> 1`, world object non-null) but rendered no geometry,
-      because the scene name was wrong
+- [x] In-process console driver: submits a line to that dispatcher from the presentation hook,
+      so a request reaches the engine without synthesising keystrokes (`g_pSysInterface` rva
+      `0x3010` matched, dispatcher hooked at `0FFAE590`, world object non-null). The driver
+      itself works and is what the level entry below uses; the payload it was first pointed at,
+      console `startscene`, loads nothing - see the corrections further down
 - [x] Scene naming resolved from the game's own level-select table in `HitmanDlc.dlc`: names
       are relative paths with no extension (`C0_Training\C0_1`), not bare `C0_1`
-- [x] On-demand scene trigger (`h47vr-go.txt`): the mod submits `startscene` whenever the file
-      appears, which is the only way to fire at a moment a player can recognise, because the
-      intro videos have to be skipped by hand (`tools/drive.ps1` writes it)
+- [x] On-demand request trigger (`h47vr-go.txt`): the mod acts whenever the file appears, which
+      is the only way to fire at a moment a player can recognise, because the intro has to be
+      advanced by hand (`tools/drive.ps1` writes it). Payloads: `push:<level>` loads a level,
+      `<mode>:<name>` calls the scene entry directly, anything else is the `startscene` dead end
 - [x] Hook re-arm after a module reload: level transitions reload the engine's modules, which
       discards every patch, so module loads now raise a flag and the frame boundary re-installs
 - [x] Scene-entry probe: `EngineData.dll` RVA `0xEF60` is `world->vtbl[0x44]`, the entry the

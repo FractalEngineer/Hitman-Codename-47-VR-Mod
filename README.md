@@ -17,7 +17,10 @@ and a 67 mm side-by-side stereo prototype renders both eyes from one gameplay
 update. A gated OpenXR backend now feeds runtime eye positions, asymmetric FOV
 tangents and predicted head orientation into that path; live headset validation
 and swapchain presentation remain. Menus and cinematics are planned for
-theater mode, with immersive stereo reserved for gameplay.
+theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
+from the 150-unit follow camera into a first-person position through the
+engine's own MouseConCam transform; head hiding and final eye-height calibration
+remain.
 
 Milestone 1 established:
 

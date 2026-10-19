@@ -6,6 +6,7 @@ add_library(h47vr_core STATIC
     src/gl_probe.cpp
     src/camera_probe.cpp
     src/camera_readback.cpp
+    src/first_person_camera.cpp
     src/look_driver.cpp
     src/stereo_renderer.cpp
     src/window_keepalive.cpp

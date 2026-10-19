@@ -148,6 +148,7 @@ headers; the modules are relocatable, so never hard-code the VA.
 | 1e | Camera selection list | `HitmanDlc.dlc` | `_ZLIST_SortCameraControls` | `0x00023430` | located |
 | 1f | Camera class info | `HitmanDlc.dlc` | `?ZCAMERA_ClassInfo@@3VZCLASSINFOZCAMERA@@A` | `0x00244320` | located |
 | 1g | MouseConCam per-frame update / live pose | `HitmanDlc.dlc` | (not exported) | `0x00026F20` | hooked; yaw/pitch read from `+0x2D/+0x31/+0x35` after update |
+| 1h | MouseConCam follow-distance targets | `HitmanDlc.dlc` | (not exported) | `0x0002714F` / `0x00027158` | gated first-person override; immediates `150.0` / `100.0` |
 | 4 | Visibility / draw distance | `HitmanDlc.dlc` | `_ZGEOM_AdoptVisibility` | `0x00159050` | located |
 | 4a | Visibility query | `HitmanDlc.dlc` | `_ZLIST_CheckVisible` | `0x0014DE30` | located |
 | 5 | Input dispatch | `Globals.dll` | `?g_pSysInput@@3PAVZSysInput@@A` | `0x00003014` | located (singleton pointer) |

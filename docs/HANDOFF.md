@@ -11,10 +11,11 @@ as the work**.
 
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
-Repo state: local `main` contains `8125855` plus the asymmetric-projection and
-head-tracking follow-up described below, while `origin/main` remains four
-commits behind. The game may or may not be running; it keeps rendering while the
-desktop is used, so a session is free to launch it and walk away.
+Repo state: local `main` contains `8125855` plus the asymmetric-projection,
+head-tracking and first-person follow-ups described below, while `origin/main`
+remains five commits behind. The game may or may not be running; it keeps
+rendering while the desktop is used, so a session is free to launch it and walk
+away.
 
 ## Where things stand (2026-10-19)
 
@@ -69,6 +70,16 @@ cinematics keep their own camera. The no-HMD path was live-tested: OpenXR still
 degrades cleanly, head tracking stays off, stereo holds 60 FPS at 67 mm, and
 closed-loop absolute aim still returns exactly to 0. The runtime tangent branch
 itself needs a live headset.
+
+**The gameplay camera can now sit in the head, 2026-10-19.** MouseConCam has two
+fixed target follow distances in the supported build: 150 game units normally
+and 100 while leaning. `first_person_camera.cpp` replaces both immediates while
+`h47vr-firstperson.txt` exists, leaving the engine to perform its own transform,
+collision and visibility work. The 3-unit default is the in-head test position.
+Live verification moved the published offset from `150` to `3`, produced an
+11.51 image difference from the normal follow view, held stereo at 60 FPS, and
+returned to the original `150` offset and a 1.75 difference when disabled. Head
+hiding, eye-height calibration and the final gameplay/head camera split remain.
 
 The game's own level start is
 
@@ -266,6 +277,8 @@ The fullscreen path at the same handler reads its own remembered cursor position
 ./tools/look.ps1 -Dx 220 -Verify        # relative, in pixels
 ./tools/look.ps1 -Yaw 90 -Verify        # absolute, in degrees from the start
 ./tools/look.ps1 -Yaw 0                 # recentre exactly
+./tools/firstperson.ps1 -Distance 3     # move MouseConCam into the head
+./tools/firstperson.ps1 -Off            # restore the follow camera
 ./tools/stereo.ps1 -IpdMillimeters 67   # side-by-side stereo prototype
 ./tools/stereo.ps1 -Off                 # back to the normal view
 ./tools/openxr.ps1 -Enable              # initialize the pose-only OpenXR backend
@@ -297,6 +310,7 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-camread.txt` | live MouseConCam pose: `yaw`, engine `pitch` (elevation, positive up), the player-relative offset, camera pointer, epoch and update count |
 | `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale>` sets physical eye separation (`tools/stereo.ps1`) |
 | `h47vr-openxr.txt` | while present, initialize OpenXR on the game's WGL context and use predicted eye X positions when available (`tools/openxr.ps1`) |
+| `h47vr-firstperson.txt` | `distance=<game units>` - replace MouseConCam's 150/100-unit follow targets so the engine places the gameplay camera in the head (`tools/firstperson.ps1`) |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
@@ -407,6 +421,10 @@ Two things the injected rotation cannot do, both worth remembering:
   the projection through `glFrustum`, and left-eye yaw/pitch drive MouseConCam
   through the existing no-focus input path. This is integrated and builds, but
   no connected headset was available to validate the tangent branch.
+- **First-person MouseConCam position.** The supported build's follow-distance
+  immediates are patched only while `h47vr-firstperson.txt` exists. A 3-unit
+  target moved the live offset from 150 to 3 with the engine still performing
+  collision and visibility; disabling it restored 150 and the normal view.
 - **OpenXR pose initialization from the game.** The gated backend initializes
   the 32-bit Virtual Desktop runtime inside the game process, creates an
   instance with `XR_KHR_opengl_enable`, reaches the runtime system query and
@@ -430,6 +448,7 @@ Modules relocate, so **always use RVAs**. Preferred bases in brackets.
 | `_ZGEOM_DemoMode` (front-end screen whose script is `ZGEOMREF StateIntro`) | `0x26D0` |
 | Level-name table (data, plain names) | file `0x2299A0`..`0x2299B4` |
 | `_ZCAMERA_MouseConCam` | `0x0264D0` |
+| MouseConCam follow-distance immediates (150 / 100) | `0x2714F` / `0x27158` |
 | `_ZCAMERA_BaseCamera` / `_MainCameraControl` / `_NewFollowCam2` / `_ScopeCamera` | `0x020E80` / `0x023940` / `0x029700` / `0x02D060` |
 | `_ZLIST_SortCameraControls` | `0x023430` |
 | `_ZGEOM_AdoptVisibility` / `_ZLIST_CheckVisible` | `0x159050` / `0x14DE30` |
@@ -724,9 +743,10 @@ are working; the remaining work is to make the stereo match the headset.
    cinematics should appear on one flat virtual screen, not two replicated
    perspective eyes. Switch to immersive stereo only when MouseConCam confirms
    gameplay, then retain theater mode for every scripted or menu state.
-5. **Hide the player's head and tune visibility.** The camera is still behind the
-   player model. Separate gameplay camera control from the headset pose and
-   remove only the head, while keeping the body for shadows and reflections.
+5. **Finish first person and tune visibility.** The gameplay camera can now sit
+   at a 3-unit MouseConCam distance. Hide the player's head while keeping the
+   body for shadows and reflections, calibrate eye height and near clipping, and
+   then split gameplay-facing yaw from residual headset orientation cleanly.
 6. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so
    the world path is the immediate-mode `0x3680` face-list consumer. Confirm its
    state restoration and transparent-pass ordering under heavier scenes, then

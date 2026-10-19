@@ -300,7 +300,17 @@ the "camera hook" the gate asked for is not needed for it.
       scale is supported by the 150-unit follow-camera distance, 5-unit near plane and 16000-unit
       far plane. The user's physical IPD is 67 mm. Eye height and a stronger geometric calibration
       remain to be measured
-- [ ] Hide the player's head and separate gameplay camera control from headset orientation
+- [x] **Move the gameplay camera into the player, 2026-10-19.** `first_person_camera.cpp` gates an
+      engine-side override of MouseConCam's two follow-distance targets (`150` normally, `100`
+      while leaning). `h47vr-firstperson.txt` requests a distance; the 3-unit default puts the
+      camera in the head at the working 100-units-per-metre scale. Verified live: the camera offset
+      changed `150 -> 3`, the view changed by 11.51 against the normal follow camera, stereo stayed
+      at 60 FPS, and disabling the gate restored the offset to `150` with a 1.75 image difference
+      (the sway noise floor). The engine still performs its own transform, collision and visibility
+      work, so this does not reintroduce culling.
+- [~] Hide the player's head and fully separate gameplay camera position from headset orientation.
+      The camera can now sit in the head, but head/body hiding, eye-height calibration and the
+      final camera/head split remain
 - [ ] Use theater mode for menus, intro cinematics and in-game cinematics; switch to immersive
       stereo only when MouseConCam confirms gameplay
 
@@ -314,6 +324,8 @@ The asymmetric-projection and head-tracking follow-up builds, holds 60 FPS in th
 keeps head tracking off when no runtime pose is valid, and preserves closed-loop absolute aim
 (`yaw=10` settles at 10.0554 degrees and `yaw=0` returns to 0.0). The asymmetric branch itself needs
 a live headset to exercise its runtime tangents.
+The first-person camera also moved from the 150-unit follow position to a 3-unit in-head position,
+with a clean restoration to the original view when disabled.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

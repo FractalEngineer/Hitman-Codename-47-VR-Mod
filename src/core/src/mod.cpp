@@ -3,6 +3,7 @@
 #include "h47vr/console_driver.hpp"
 #include "h47vr/camera_probe.hpp"
 #include "h47vr/camera_readback.hpp"
+#include "h47vr/first_person_camera.hpp"
 #include "h47vr/fingerprint.hpp"
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/hooks.hpp"
@@ -206,6 +207,7 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
     // would be lost again immediately.
     CameraProbeFrame(frame);
     CameraReadbackFrame(frame);
+    FirstPersonCameraFrame(frame);
     OpenXrPoseFrame(device, frame);
     StereoRendererFrame(frame);
     // Head pose arrives here: posting WM_MOUSEMOVE makes the engine rotate its
@@ -292,6 +294,7 @@ void ApplyReinstall() {
         InstallGameplayHooks();
         CameraProbeInstall();
         CameraReadbackRearm();
+        FirstPersonCameraRearm();
     }
     if (renderer != nullptr) {
         RendererProbeReset();
@@ -397,6 +400,7 @@ bool Initialize(const char* trigger) {
     SceneProbeInstall();
     ConsoleDriverInstall();
     LookDriverStart();
+    FirstPersonCameraStart();
     StereoRendererStart();
     OpenXrPoseStart();
     WatchModuleLoads(L"HitmanDlc.dlc", &RequestReinstall);

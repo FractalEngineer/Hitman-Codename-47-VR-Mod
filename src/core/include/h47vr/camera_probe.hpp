@@ -30,4 +30,14 @@ void* CameraProbeObject();
 // from the presentation hook.
 void CameraProbeReport(unsigned long frame);
 
+// Drives the engine's own camera when <game>\h47vr-camwrite.txt asks for it.
+//
+// Two hook points, because the order of the engine's frame decides which one can
+// work: the camera has to be rotated after the engine writes it and before the
+// frame is built from it. `CameraProbeFrame` runs at the presentation boundary
+// (the end of a frame, so it affects the next one) and `CameraProbeOnFrustum`
+// runs from the proxy's glFrustum detour, inside the frame that is being built.
+void CameraProbeFrame(unsigned long frame);
+void CameraProbeOnFrustum();
+
 }  // namespace h47vr

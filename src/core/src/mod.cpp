@@ -197,6 +197,10 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
     // The engine's own thread, once per frame: the only place the console
     // dispatcher can be re-entered safely.
     ConsoleDriverPump(frame);
+    // The camera write has to be offered every frame, not on the report
+    // heartbeat: the engine rewrites the camera from input, so a one-shot write
+    // would be lost again immediately.
+    CameraProbeFrame(frame);
     // First few frames, then a heartbeat: enough to prove presentation is
     // intercepted and to estimate the rate without flooding the log.
     if (frame <= 5) {

@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -154,6 +155,31 @@ struct Candidate {
     // the first triple with a large magnitude is worth dumping around: that is
     // where its rotation will be, if it stores one.
     bool posDumped;
+    // The 3x3 at +0x0DA, which is where every camera-shaped object here keeps
+    // its basis: the level camera holds the plain axis swap there and the menu
+    // camera holds a real rotation. If one of these turns when the mouse turns,
+    // that object is the camera and this is the field to drive.
+    float basis[9];
+    bool basisSeen;
+    // What this probe last wrote here, so the engine's own value can be told
+    // apart from ours. Without this, a second write would rotate the result of
+    // the first and the view would spin away a little more every frame.
+    float written[9];
+    bool wrote;
+    // True once the engine itself has changed this object's basis. That is what
+    // marks it as the camera the mouse drives rather than a frozen copy of it.
+    bool basisChanged;
+    // True once the +0x106 triple has been seen to move. Several objects hold a
+    // constant 8000 or 1000 at that offset, which are far-plane and near-plane
+    // style constants; the camera is the object whose triple keeps moving.
+    bool tripleChanged;
+    // Per-offset change counters over the window before the next report, so the
+    // fields the engine drives on the camera can be named instead of guessed at.
+    // Only candidates that have already shown themselves to be the camera are
+    // tracked this way.
+    unsigned char prev[kScanBytes];
+    bool prevValid;
+    unsigned short changes[kScanBytes / 4];
 };
 
 constexpr int kMaxCandidates = 24;
@@ -305,6 +331,15 @@ bool AddCandidate(void* object) {
     c.baseline = false;
     c.tripleSeen = false;
     c.posDumped = false;
+    c.basisSeen = false;
+    std::memset(c.basis, 0, sizeof(c.basis));
+    c.wrote = false;
+    std::memset(c.written, 0, sizeof(c.written));
+    c.basisChanged = false;
+    c.tripleChanged = false;
+    c.prevValid = false;
+    std::memset(c.prev, 0, sizeof(c.prev));
+    std::memset(c.changes, 0, sizeof(c.changes));
     c.triple[0] = c.triple[1] = c.triple[2] = 0.0f;
     std::memset(c.snapshot, 0, sizeof(c.snapshot));
     return true;
@@ -325,6 +360,9 @@ void ReportTriple(Candidate& c) {
                          z != c.triple[2];
     if (!changed) {
         return;
+    }
+    if (c.tripleSeen) {
+        c.tripleChanged = true;
     }
     c.tripleSeen = true;
     c.triple[0] = x;
@@ -359,6 +397,215 @@ void ReportTriple(Candidate& c) {
             }
             H47VR_LOG_INFO("    +0x%03X  %08X %08X %08X %08X %08X %08X %08X %08X",
                            at, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+        }
+    }
+}
+
+// The 3x3 at +0x0DA, logged whenever it changes. This is the field that tells the
+// camera apart from everything else: turn the view and only its basis moves.
+void ReportBasis(Candidate& c) {
+    const auto* m = reinterpret_cast<const float*>(
+        static_cast<const unsigned char*>(c.object) + 0x0DA);
+    if (!Readable(m, 9 * sizeof(float))) {
+        return;
+    }
+    bool changed = !c.basisSeen;
+    for (int i = 0; i < 9 && !changed; ++i) {
+        if (m[i] != c.basis[i]) {
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return;
+    }
+    if (c.basisSeen) {
+        // The engine moved it: this is the live camera, not a frozen copy.
+        c.basisChanged = true;
+    }
+    c.basisSeen = true;
+    for (int i = 0; i < 9; ++i) {
+        c.basis[i] = m[i];
+    }
+    H47VR_LOG_INFO("  %p +0x0DA | %8.4f %8.4f %8.4f | %8.4f %8.4f %8.4f | "
+                   "%8.4f %8.4f %8.4f |",
+                   c.object, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+}
+
+// --- driving the engine's own camera ---------------------------------------
+//
+// h47vr-camwrite.txt:  yaw=<deg> pitch=<deg> [at=frame|frustum]
+//
+// The empirical answer to "which object is the camera" is the one whose basis
+// the engine itself turns: sweeping the mouse turned exactly one candidate's
+// +0x0DA and nothing else in the level. So the write goes only to candidates the
+// engine has been observed updating - a frozen copy of the same basis exists
+// elsewhere, and rotating that would do nothing visible.
+//
+// The write is deliberately idempotent. The engine's own value is adopted and
+// rotated; if what is in memory is still our value, nothing happens, so calling
+// this every frame cannot compound into a spin.
+std::wstring g_write_path;
+std::atomic<bool> g_write_open{false};
+std::atomic<bool> g_write_from_frustum{false};
+std::atomic<bool> g_write_dry{false};
+// -1 = the camera picked by its behaviour; >= 0 = one specific candidate, for
+// the sweep that finds which object the renderer actually reads.
+std::atomic<int> g_write_index{-1};
+constexpr bool kWriteAll = false;
+float g_write_yaw = 0.0f;
+float g_write_pitch = 0.0f;
+unsigned int g_write_ticks = 0;
+std::atomic<unsigned long> g_write_applied{0};
+
+// Rx(pitch) * Ry(yaw), row-major, the same composition the vertex-level camera
+// uses. Pre-multiplied onto the camera's basis, this rotates the camera itself,
+// which is what makes the culling follow the view.
+void ShapeWriteMatrix(float out[9]) {
+    const float yaw = g_write_yaw * 3.14159265358979f / 180.0f;
+    const float pitch = g_write_pitch * 3.14159265358979f / 180.0f;
+    const float cy = std::cos(yaw);
+    const float sy = std::sin(yaw);
+    const float cp = std::cos(pitch);
+    const float sp = std::sin(pitch);
+    const float yawM[9] = {cy, 0.0f, sy, 0.0f, 1.0f, 0.0f, -sy, 0.0f, cy};
+    const float pitchM[9] = {1.0f, 0.0f, 0.0f, 0.0f, cp, -sp, 0.0f, sp, cp};
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            float sum = 0.0f;
+            for (int k = 0; k < 3; ++k) {
+                sum += pitchM[row * 3 + k] * yawM[k * 3 + column];
+            }
+            out[row * 3 + column] = sum;
+        }
+    }
+}
+
+// Re-reads the control file, a few times a second rather than every frame, so a
+// live edit takes effect without a relaunch.
+void RefreshCameraWrite() {
+    if ((++g_write_ticks & 0x1F) != 0) {
+        return;
+    }
+    const bool present =
+        ::GetFileAttributesW(g_write_path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (!present) {
+        if (g_write_open.exchange(false)) {
+            H47VR_LOG_INFO("camera write: off (control file removed), %lu writes",
+                           g_write_applied.load());
+        }
+        return;
+    }
+
+    FILE* file = nullptr;
+    if (::_wfopen_s(&file, g_write_path.c_str(), L"rb") != 0 || file == nullptr) {
+        return;
+    }
+    char text[160] = {};
+    const size_t read = std::fread(text, 1, sizeof(text) - 1, file);
+    std::fclose(file);
+    text[read] = '\0';
+
+    const float yaw = static_cast<float>(std::atof(std::strstr(text, "yaw=") ? std::strstr(text, "yaw=") + 4 : "0"));
+    const float pitch =
+        static_cast<float>(std::atof(std::strstr(text, "pitch=") ? std::strstr(text, "pitch=") + 6 : "0"));
+    const bool fromFrustum = std::strstr(text, "at=frustum") != nullptr;
+    const bool dry = std::strstr(text, "dry=1") != nullptr;
+    int index = -1;
+    const char* indexAt = std::strstr(text, "index=");
+    if (indexAt != nullptr) {
+        index = std::atoi(indexAt + 6);
+    }
+
+    const bool wasOpen = g_write_open.exchange(true);
+    if (!wasOpen || yaw != g_write_yaw || pitch != g_write_pitch ||
+        fromFrustum != g_write_from_frustum.load() || dry != g_write_dry.load() ||
+        index != g_write_index.load()) {
+        g_write_yaw = yaw;
+        g_write_pitch = pitch;
+        g_write_from_frustum = fromFrustum;
+        g_write_dry = dry;
+        g_write_index = index;
+        H47VR_LOG_INFO("camera write: on (yaw=%.2f pitch=%.2f at=%s%s)", yaw, pitch,
+                       fromFrustum ? "frustum" : "frame",
+                       index >= 0 ? " (single candidate)" : (dry ? ", dry run" : ""));
+    }
+}
+
+void ApplyCameraWrite() {
+    if (!g_write_open.load()) {
+        return;
+    }
+    float rotation[9];
+    ShapeWriteMatrix(rotation);
+
+    const bool dry = g_write_dry.load();
+    const int only = g_write_index.load();
+    int touched = 0;
+    for (int i = 0; i < g_candidate_count; ++i) {
+        if (touched >= 4) {
+            break;  // a camera is one object; more than a few means a mistake
+        }
+        if (only >= 0 && i != only) {
+            continue;
+        }
+        Candidate& c = g_candidates[i];
+        if (!c.basisSeen) {
+            continue;
+        }
+        auto* m = reinterpret_cast<float*>(
+            static_cast<unsigned char*>(c.object) + 0x0DA);
+        if (!Readable(m, 9 * sizeof(float))) {
+            continue;
+        }
+        // Only a genuine rotation is ever touched. The first version of this
+        // writer skipped this check, and when a world object happened to hold
+        // non-float data at +0x0DA it overwrote it with nonsense and took the
+        // game down. A camera basis is orthonormal; nothing else here is written.
+        if (!OrthonormalF(m)) {
+            continue;
+        }
+        // The camera, and only the camera, is picked by its position rather than
+        // by its basis. Its basis at the start of the training level is exactly
+        // the ZGEOM default (the axis swap) because the player faces along an
+        // axis, so filtering on "not the default" threw the camera away. What
+        // nothing else here does is keep moving: several candidates hold a
+        // constant 8000 or 1000 at +0x106, which never change.
+        if (only < 0 && !c.tripleChanged && !c.basisChanged) {
+            continue;
+        }
+        if (c.wrote && std::memcmp(m, c.written, sizeof(c.written)) == 0) {
+            continue;  // still our value; the engine has not refreshed it
+        }
+        float next[9];
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 3; ++column) {
+                float sum = 0.0f;
+                for (int k = 0; k < 3; ++k) {
+                    sum += rotation[row * 3 + k] * m[k * 3 + column];
+                }
+                next[row * 3 + column] = sum;
+            }
+        }
+        std::memcpy(c.written, next, sizeof(next));
+        ++touched;
+        if (dry) {
+            if (g_write_applied.load() == 0) {
+                H47VR_LOG_INFO("camera write (dry): would write %p | %8.4f %8.4f %8.4f | "
+                               "%8.4f %8.4f %8.4f | %8.4f %8.4f %8.4f |",
+                               c.object, next[0], next[1], next[2], next[3], next[4],
+                               next[5], next[6], next[7], next[8]);
+                g_write_applied = 1;
+            }
+            continue;
+        }
+        c.wrote = true;
+        std::memcpy(m, next, sizeof(next));
+        const unsigned long total = ++g_write_applied;
+        if (total == 1 || total % 300 == 0) {
+            H47VR_LOG_INFO("camera write: %p basis | %8.4f %8.4f %8.4f | "
+                           "%8.4f %8.4f %8.4f | %8.4f %8.4f %8.4f |",
+                           c.object, next[0], next[1], next[2], next[3], next[4],
+                           next[5], next[6], next[7], next[8]);
         }
     }
 }
@@ -413,8 +660,8 @@ void ObserveCameraUpdate(void* self, void* a1, void* a2) {
     }
 
     if (AddCandidate(self)) {
-        H47VR_LOG_INFO("cam update: watching new self %p (call %lu); "
-                       "rotation-shaped blocks:", self, call);
+        H47VR_LOG_INFO("cam update: watching new self #%d %p (call %lu); "
+                       "rotation-shaped blocks:", g_candidate_count - 1, self, call);
         ScanForRotations(self);
         const auto* f = reinterpret_cast<const float*>(
             static_cast<const unsigned char*>(self) + 0x106);
@@ -436,6 +683,7 @@ bool CameraProbeInstall() {
     }
 
     g_gate = JoinPath(mod::GameDirectory(), L"h47vr-camobj.txt");
+    g_write_path = JoinPath(mod::GameDirectory(), L"h47vr-camwrite.txt");
     h47vr_camera_args_target = reinterpret_cast<void*>(&ObserveCameraTransform);
 
     void* target = reinterpret_cast<char*>(gameplay) + kClipRva;
@@ -462,6 +710,53 @@ bool CameraProbeInstall() {
 
 bool CameraProbeRearm() {
     return CameraProbeInstall();
+}
+
+// Once per presented frame, from the presentation hook: the end of a frame, so a
+// write here lands before the next frame is built.
+void CameraProbeFrame(unsigned long frame) {
+    RefreshCameraWrite();
+    if (!g_write_from_frustum.load()) {
+        ApplyCameraWrite();
+    }
+
+    // Track, per frame, which dwords of the identified camera change. The
+    // engine's own camera moves here on its own (the level opening sweeps it),
+    // which is what makes this work without anyone touching the input devices.
+    if (g_gate.empty() ||
+        ::GetFileAttributesW(g_gate.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return;
+    }
+    for (int i = 0; i < g_candidate_count; ++i) {
+        Candidate& c = g_candidates[i];
+        if (!c.tripleChanged || !Readable(c.object, kScanBytes)) {
+            continue;
+        }
+        const auto* now = static_cast<const unsigned char*>(c.object);
+        if (!c.prevValid) {
+            std::memcpy(c.prev, now, kScanBytes);
+            c.prevValid = true;
+            continue;
+        }
+        for (int offset = 0; offset + 4 <= kScanBytes; offset += 4) {
+            if (std::memcmp(c.prev + offset, now + offset, 4) == 0) {
+                continue;
+            }
+            std::memcpy(c.prev + offset, now + offset, 4);
+            if (c.changes[offset / 4] < 0xFFFF) {
+                ++c.changes[offset / 4];
+            }
+        }
+    }
+    (void)frame;
+}
+
+// From the proxy's glFrustum detour, inside the frame being built: the camera is
+// already final for this frame, and the world has not been transformed yet.
+void CameraProbeOnFrustum() {
+    if (g_write_from_frustum.load()) {
+        ApplyCameraWrite();
+    }
 }
 
 void DumpCamera(void* camera, const char* why) {
@@ -495,7 +790,31 @@ void CameraProbeReport(unsigned long frame) {
         // and only grows its transform once the engine has filled it in. The
         // AlreadyReported set keeps this from printing the same find twice.
         ScanForRotations(c.object);
+        ReportBasis(c);
         ReportTriple(c);
+        // What the engine itself drives on the camera, by offset: the fields it
+        // rewrites most often are the position and the orientation.
+        if (c.tripleChanged) {
+            for (int top = 0; top < 10; ++top) {
+                int best = -1;
+                unsigned short bestCount = 0;
+                for (int slot = 0; slot < kScanBytes / 4; ++slot) {
+                    if (c.changes[slot] > bestCount) {
+                        bestCount = c.changes[slot];
+                        best = slot;
+                    }
+                }
+                if (best < 0 || bestCount < 2) {
+                    break;
+                }
+                const auto* f = reinterpret_cast<const float*>(
+                    static_cast<const unsigned char*>(c.object) + best * 4);
+                H47VR_LOG_INFO("  %p field +0x%03X changed %u times, now %.4f",
+                               c.object, best * 4, bestCount, f[0]);
+                c.changes[best] = 0;
+            }
+            std::memset(c.changes, 0, sizeof(c.changes));
+        }
         const int changed = DiffCandidate(c);
         if (changed == 0) {
             continue;

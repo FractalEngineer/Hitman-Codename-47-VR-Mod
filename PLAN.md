@@ -86,8 +86,22 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       at run time as the `CamUpdate` object whose `+0x106` has a large magnitude. Its rotation is
       *not* stored as an orthonormal 3x3 in its first `0x800` bytes even when scanning at 2-byte
       offsets, so it is either derived per frame or stored some other way. `h47vr-camobj.txt` now
-      drives this probe: it reports each candidate's `+0x106` and how many dwords moved since the
-      last tick
+      drives this probe: it reports each candidate's `+0x106`, its basis, and the offsets the
+      engine itself rewrites. **What that produced, and closed off:** the camera really is
+      identifiable (the `CamUpdate` object whose `+0x106` keeps moving - there is one, at
+      `MouseConCam`'s object `+0xEA8`), and a writer that rotates its basis at `+0x0DA` was built
+      and run. It is applied every frame and the game holds it, but **the picture does not
+      change**: a sweep that rotated each of the 24 candidates in turn scored 1.1-6.4 against a
+      baseline sway noise of 5.98, i.e. nothing. So no `CamUpdate` object's `+0x0DA` drives the
+      rendered view, and that field is a dead end for camera control
+- [x] **Where the view transform actually is, 2026-10-19.** Culling is real and confirmed
+      visually rather than inferred: with the vertex rotation at `yaw=60`, `tools/capture.ps1`
+      shows the scene rotated *and* large areas left empty (789 -> 219 distinct colours, mean
+      difference 36.27 against a noise floor of ~6), which is geometry the engine discarded before
+      the proxy saw it. The vertex stack then says where to look: `Clip` reaches `glVertex3fv`
+      through `RenderOpenGL.dll` (`+0x0292FA` -> `+0x004483` -> `+0x008A78`, the direct caller), so
+      the world-to-eye transform is applied inside the engine's OpenGL module, not in the gameplay
+      module - which is exactly why rotating a gameplay-side camera object does nothing
 - [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
       `glLoadMatrixf` in modelview is identity once per frame, and `glPushMatrix`, `glPopMatrix`,
       `glMultMatrixf`, `glRotatef` and `glScalef` are never called at all. The only matrix the GL
@@ -100,12 +114,16 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       built by that constructor (0x93 bytes, vtable `PTR_FUN_0feb1748`; `BaseCamera` is 0x32
       bytes, vtable `PTR_FUN_0feb1104`). Hooking the export only reports when the camera class is
       instantiated, which is why it fires so rarely
-- [x] Corrected: the tooling process cannot see or drive the game's desktop. `PrintWindow`
-      returns a black frame, and both `CopyFromScreen` and a raw `BitBlt` from the desktop DC fail
-      with "the handle is invalid", even when escalated - while window enumeration by PID works.
-      That is the reason the synthetic ESC bursts never skipped the intro: the keys had nowhere to
-      land. The user presses ESC, and the user is the only reliable observer of the picture; all
-      verification from the tooling side has to be numeric
+- [x] **Corrected twice, and the second correction matters: the tooling CAN see the game.**
+      The earlier entry here claimed `PrintWindow` returns black and that `CopyFromScreen` and
+      `BitBlt` fail with "the handle is invalid". Both halves are wrong today. `PrintWindow` with
+      `PW_RENDERFULLCONTENT` (flag 2) returns the window's own contents - a clean 800x600 frame,
+      with the window behind other applications and without stealing focus - and a plain
+      `CopyFromScreen` works as well. `tools/capture.ps1` wraps both, and `-Compare` reports a mean
+      absolute per-channel difference between two shots, which is enough to answer "did that
+      change the picture" without asking anyone to look. Only the *input* half of the old note
+      survives: synthetic keys still need the window to be foreground, `SetForegroundWindow` is
+      refused, so the user still presses ESC for the intro
 - [x] **Solved, 2026-10-19: the game pauses when its window is not active.** The user reported
       that it stops running when the window is not focused while audio keeps playing, and that is
       what every one of the "stalls" was: the tooling shell taking focus, the engine quietly

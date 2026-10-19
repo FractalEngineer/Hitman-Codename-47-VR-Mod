@@ -108,7 +108,8 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
 | `h47vr-glmatrix.txt` | while the file exists, log every changed `glLoadMatrixf` matrix |
 | `h47vr-stack.txt` | dump a few stacks at `glVertex3fv`, to re-find the engine's transform |
-| `h47vr-camobj.txt` | world probe: reports every camera candidate's `+0x106` triple and how many dwords moved since the last tick |
+| `h47vr-camobj.txt` | world probe: reports every camera candidate's `+0x106` triple, its `+0x0DA` basis, and the offsets the engine itself rewrites |
+| `h47vr-camwrite.txt` | `yaw=<deg> pitch=<deg> [at=frame\|frustum] [index=<n>] [dry=1]` - rotates the identified camera object's basis in memory |
 
 Two things the injected rotation cannot do, both worth remembering:
 
@@ -257,7 +258,16 @@ suspected pointer: if a candidate is really one object it repeats, and if it is
 per-object it does not. `h47vr-camobj.txt` dumps the captured object's raw words,
 the same words as floats, and the 3x3 behind field `+4`.
 
-**Still missing: the engine's world-to-eye transform.** Established: the
+**Still missing: the engine's world-to-eye transform, and where it lives is now
+known.** Rotating a gameplay-side camera object's basis does nothing: the whole
+set of `CamUpdate` objects was swept, one at a time, and no candidate's `+0x0DA`
+changed the picture at all (differences 1.1-6.4 against a ~6.0 noise floor). The
+vertex stack says why - `Clip` reaches `glVertex3fv` through `RenderOpenGL.dll`
+(`+0x0292FA` -> `+0x004483` -> `+0x008A78`, the direct caller), so the transform is
+applied inside the engine's OpenGL module, not the gameplay module. **Search
+`RenderOpenGL.dll` next.**
+
+Established: the
 modelview is always identity, the projection is a plain perspective with no
 rotation or translation (checked in a loaded level), and `glMultMatrixf`,
 `glPushMatrix`, `glPopMatrix`, `glRotatef` and `glScalef` are never called at
@@ -327,11 +337,15 @@ mechanism, not as a camera finder.
   (0x93 bytes, vtable `PTR_FUN_0feb1748`; `BaseCamera` 0x32 bytes, vtable
   `PTR_FUN_0feb1104`). Hooking the export reports class instantiation, not camera
   updates.
-- **Screen capture and synthetic input from the tooling shell.** `PrintWindow`
-  returns a black frame and both `CopyFromScreen` and a raw `BitBlt` from the
-  desktop DC fail with "the handle is invalid" even when escalated, while window
-  enumeration by PID works fine. Verification has to be numeric, or come from the
-  user.
+- **Screen capture is NOT impossible - the old note here was wrong.** `PrintWindow`
+  with `PW_RENDERFULLCONTENT` (flag 2) returns the window's own contents: a clean
+  800x600 frame, with the game behind other applications and without stealing
+  focus. A plain `CopyFromScreen` of the desktop works too. Use
+  `tools/capture.ps1`, which does both and has a `-Compare` mode that reports a
+  mean absolute per-channel difference between two shots, so "did that change the
+  picture" is answerable from here. What genuinely does not work is *input*:
+  synthetic keys need the window to be foreground and `SetForegroundWindow` is
+  refused, so the user still presses ESC for the intro.
 - **`llLevels`** is the archive name inside `AllLevels/...` paths, not a
   level-selection property.
 

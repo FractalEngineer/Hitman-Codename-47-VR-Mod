@@ -1,5 +1,6 @@
 #include "h47vr/gl_probe.hpp"
 
+#include "h47vr/camera_probe.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
 #include "h47vr/paths.hpp"
@@ -385,6 +386,10 @@ void WINAPI DetourFrustum(double left, double right, double bottom, double top,
                            fovY, (right - left) / (top - bottom));
         }
     }
+    // The world projection is set up once the camera is final and before the
+    // world is transformed for it, which makes this the one point in the frame
+    // where driving the camera affects both the view and the culling.
+    CameraProbeOnFrustum();
     g_real_frustum(left, right, bottom, top, zNear, zFar);
 }
 

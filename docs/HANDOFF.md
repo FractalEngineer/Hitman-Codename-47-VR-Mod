@@ -153,10 +153,36 @@ A turn can also be an absolute aim rather than a pixel count:
 
 The engine integrates deltas and has no look-at entry point, so the driver keeps
 a dead-reckoned estimate, writes it to `h47vr-lookstate.txt`, and posts the
-difference. `degperpx` (default 0.2) is the calibration knob. This is honest
+difference. `degperpx` (default 0.09) is the calibration knob. This is honest
 dead reckoning, not a read-back of the engine's camera: anything else that turns
 the player - a scripted camera, a cutscene, the real mouse - desyncs it until it
 is recentred.
+
+The scale is a **visual** estimate, not a measurement: by eye against the tiled
+cell, 450 posted pixels read as about 45 degrees and 900 as about 80. Three
+attempts at something exact all failed, and they are worth not repeating:
+
+- **Floor-plane homography.** `tools/calibrate-look.py` computes the rotation
+  between two captures from the floor, and it is correct on a synthetic 9 degree
+  warp (9.013). On real frames it returns ~1 degree per 100 px with a large
+  off-axis residual - the fit is not the floor. The camera sways on four sine
+  oscillators and orbits the player, so consecutive frames are not a clean plane
+  homography, and only ~35 of ~50 features survive RANSAC.
+- **Tile repeat.** The training cell's floor is a square grid, so a 90 degree
+  turn should reproduce the pattern (rotated). A sweep of 100..1400 px in 100 px
+  steps shows no dip at any point: the cell is too self-similar and the camera
+  orbit changes the framing as much as the rotation.
+- **Process-memory float scan.** `tools/scan-yaw.py` snapshots writable memory,
+  injects the same turn twice, and keeps floats whose delta is identical - then
+  repeats with a doubled turn to catch scaling. No address survives: the
+  candidate sets do not even overlap between runs. The yaw is therefore not a
+  scalar angle in a stable field; expect a basis vector or a quaternion, which
+  is consistent with the earlier failure to drive the `CamUpdate` basis.
+
+The exact value arrives for free with the Milestone 2 camera work: once the
+world-to-eye transform is readable, it gives the yaw directly. Until then
+`-DegPerPixel` overrides the default per request, and `yaw=0` still recentres
+exactly whatever the scale, because the state is the pixel total.
 
 The windowed path only acts while the renderer holds the cursor (`renderer+299`,
 set by the `ClipCursor` wrapper at RVA `0x2B640`), which happens in gameplay.

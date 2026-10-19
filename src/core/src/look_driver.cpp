@@ -49,11 +49,13 @@ bool g_reported_window = false;
 // recentre: yaw=0 still posts exactly the pixels needed to undo the total.
 double g_px_x = 0.0;
 double g_px_y = 0.0;
-// Measured 2026-10-19 in the training level: 450 posted pixels read as about 45
-// degrees, so the scale is ~0.1 deg/px. The first build assumed 0.2 and turned
-// half as far as asked.
-double g_deg_per_px = 0.1;
-double g_turn_deg_per_px = 0.1;
+// Measured 2026-10-19 in the training level by eye, against the tiled cell:
+// 450 posted pixels read as about 45 degrees and 900 as about 80, so ~0.09
+// deg/px. Two attempts at reading it exactly from the images and one from
+// process memory are recorded as dead ends in docs/HANDOFF.md; the definitive
+// read-back arrives with the camera-yaw work in Milestone 2.
+double g_deg_per_px = 0.09;
+double g_turn_deg_per_px = 0.09;
 
 // Rounds to nearest instead of truncating, so a turn split over N frames lands
 // on the requested pixel count exactly even when the split is not whole

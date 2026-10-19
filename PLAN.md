@@ -55,28 +55,20 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] Renderer map: GL import call-site analysis (`tools/ghidra/DumpReferences.java`) plus
       in-process call-rate confirmation, which identified the frame boundary and the four
       2D UI passes
-- [~] **Controllable camera: the view is now driven from the mod, 2026-10-19.** The engine does
-      its own view transform - the GL modelview is always identity and the projection is a plain
-      perspective - so the camera cannot be moved through the matrix pipeline. It is moved where
-      the geometry is: the proxy's `glVertex3fv`/`glVertex3f` slot, which about 2,900 eye-space
-      vertices per frame pass through in immediate mode. A 3x3 rotation is applied to each one
-      while the perspective projection is current (the front end and HUD draw through an
-      orthographic projection and are left alone). `h47vr-cam.txt` - `yaw=.. pitch=..` - turns it
-      on and off. Verified numerically (4.19M vertices transformed, the gate turns on and off
-      cleanly, and the vertices are provably eye-space) **and visually confirmed by the user in a
-      loaded level**: the view turns with `h47vr-cam.txt`. Two limits remain, and they are the
-      current work. The engine culls against the frustum of the camera *it* believes it has, so a
-      large injected yaw shows the scene with pieces missing (the user's words: "we're just
-      completely clipping"); and an injected rotation visibly wrecks the front end's in-engine
-      openings. Rotating vertices cannot bring back culled geometry - the engine's own view
-      transform has to be driven instead, which is the next task (leads in `docs/HANDOFF.md`)
+- [x] **Controllable camera, 2026-10-19.** The first implementation rotated eye-space vertices at
+      the proxy's `glVertex3fv`/`glVertex3f` slot (about 2,900 vertices per frame), which proved the
+      view could move - but the engine had already culled against its own frustum, so large turns
+      left holes and the front end's in-engine openings were damaged. That route is now only a
+      sub-degree fallback. Free look posts `WM_MOUSEMOVE` into the engine's queue; the engine rotates
+      its own camera and its visibility pass follows, with no focus, keyboard or cursor theft. The
+      MouseConCam readback then supplies the resulting pose for absolute aim
 - [x] GL pipeline probe at the proxy boundary: the engine's GL calls are intercepted by
       redirecting the proxy's *own* export slots (`src/proxy_opengl32/gl_probe.cpp`). Every thunk
       in the generated proxy loads a slot and jumps to it, so writing the slot intercepts the call
       with no code patching and no engine address. Control files: `h47vr-glprobe.txt` (comma list
       of exports), `h47vr-no-glprobe.txt` (none), `h47vr-glmatrix.txt` (matrix log gate)
-- [~] **Engine camera hunt, 2026-10-19.** The vertex-level rotation cannot be the whole answer, so
-      the engine's own camera is being found *empirically* instead of by reading the decompiler,
+- [x] **Engine camera hunt, 2026-10-19.** The vertex-level rotation could not be the whole answer,
+      so the engine's own camera was found *empirically* instead of by reading the decompiler,
       which mis-reads this code's stack arguments - that is exactly how the last argument of `Clip`
       came to be mistaken for a camera. Settled by disassembly (`tools/ghidra/DumpRange.java`):
       `FUN_0fd53c50` is the ZGEOM `Clip` method and reaches `glVertex3fv`; `FUN_0fd56120` is
@@ -138,16 +130,17 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       (`RenderOpenGL` `0x29AC0`..`0x29E50`), so the engine still updates its own state and the
       desktop pointer is untouched - verified by the swallow counter rising by exactly one per
       posted message. A request can also name an absolute aim, `yaw=<deg> pitch=<deg>
-      [degperpx=<deg>]`: the engine integrates deltas, so the driver keeps a dead-reckoned
-      estimate in `h47vr-lookstate.txt` and posts the difference. Verified end to end: `yaw=90`
-      changed the frame by 27.20 against a 1.31 control, and both a 200 px and a 450 px reversal
-      returned to 4.2-5.1. What remains is that the estimate is dead reckoning, not a read-back of
-      the engine's camera, so anything else that turns the player desyncs it until recentred
+      [degperpx=<deg>]`. The MouseConCam update now publishes its live offset vector through
+      `h47vr-camread.txt`, so absolute aim is closed against the engine's actual pose rather than
+      a dead-reckoned estimate. The measured scale is 0.1289156 deg/px (100 px = 12.8915 degrees,
+      450 px = 58.0120), and `yaw=0 pitch=0` returns exactly to the starting orientation. Absolute
+      requests queue until MouseConCam has produced its first readback; relative pixel turns still
+      act immediately and use the integral as their fallback
 - [x] **Mouse-look model mapped, 2026-10-19.** The crosshair is the aim: `MouseConCam`'s per-frame
       update (`HitmanDlc.dlc` RVA `0x26F20`) takes the crosshair position and turns it into a look
       offset with a `tan` term, while the player's facing follows the integrated mouse delta
-      (`g_pSysInterface + 0xa95`/`+0xa99`). That is why dead reckoning tracks the same integral the
-      engine uses. Found with the new `tools/ghidra/FindScalarRefs.java`, which searches
+      (`g_pSysInterface + 0xa95`/`+0xa99`). That is why the earlier dead reckoning tracked the same
+      integral the engine uses. Found with the new `tools/ghidra/FindScalarRefs.java`, which searches
       instructions for a displacement instead of an address - the earlier scripts could only
       follow symbols, not struct fields
 - [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
@@ -265,14 +258,16 @@ the "camera hook" the gate asked for is not needed for it.
 
 ### Milestone 2 - correct stereo rendering
 
-- [ ] **Read the engine's camera yaw back.** It unblocks exact look calibration, an
-      absolute (not dead-reckoned) head aim, and the world-to-eye transform stereo needs. The
-      value is computed every frame in `MouseConCam`'s update (`HitmanDlc.dlc` RVA `0x26F20`)
-      in degrees, via the constants at `0x0feb17d0`..`0x0feb17d8` (360, 90, 57.29578). A
-      float scan of process memory found no stable scalar field, so expect a basis vector or
-      quaternion. `camera_probe.cpp` already hooks `CamUpdate` (`0x0fd56120`) and tracks
-      candidates. Note the input side is ready: `tools/look.ps1` turns the engine's own camera
-      with no focus and no cursor theft, so the head pose can already be injected
+- [x] **Read the engine's camera yaw back, 2026-10-19.** `camera_readback.cpp` hooks
+      `MouseConCam`'s per-frame update (`HitmanDlc.dlc` RVA `0x26F20`) and reads the live
+      player-relative offset at `+0x2d`/`+0x31`/`+0x35` after the engine has rotated it. The
+      offset is published through `h47vr-camread.txt`; yaw is `atan2(-x, -z)`, and engine elevation
+      is `atan2(y, horizontal)`. This is state read-back, not a frozen scalar or a guessed camera
+      object. Controlled turns measured 12.8915 degrees at 100 px and 58.0120 degrees at 450 px,
+      giving 0.1289156 deg/px; a -100 px turn returned to the exact start pose. Absolute aim now
+      uses `h47vr-lookstate.txt` with `source=readback`, while retaining the pixel integral as the
+      pre-MouseConCam fallback. Verified live: target 10 / -5 settled at 10.0554 / -5.02771
+      (within one pixel of rounding), and a 0 / 0 recenter returned to 0 / 0
 - [~] Update gameplay once, then render both eyes from the same simulation state
       (frame boundary identified: `RenderOpenGL.dll` RVA `0x0048F0`, the only caller of
       `SwapBuffers`; measured at ~1 call per frame. `FUN_0fb73680` is per-pass at ~17-18

@@ -31,8 +31,9 @@ DESCRIPTION
     is.
 
 .PARAMETER DegPerPixel
-    Camera degrees per mouse pixel, for absolute requests. The default is 0.1,
-    measured against a known quarter turn in the training level.
+    Camera degrees per mouse pixel, for absolute requests. The default is
+    0.1289156, measured against the engine's live camera readback in the
+    training level. The mod ignores this fallback while readback is available.
 
 .PARAMETER Verify
     Capture before and after with tools/capture.ps1 and report the difference.
@@ -80,7 +81,7 @@ function Resolve-GameDir {
 $GameDir = Resolve-GameDir -Requested $GameDir
 
 $game = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    Select-Object -First 1
 if (-not $game) { throw "The game is not running. Start it first; the mod posts the move in-process." }
 
 $shots = Join-Path $PSScriptRoot '_shots'

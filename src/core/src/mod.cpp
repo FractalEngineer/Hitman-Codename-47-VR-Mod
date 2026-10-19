@@ -2,6 +2,7 @@
 
 #include "h47vr/console_driver.hpp"
 #include "h47vr/camera_probe.hpp"
+#include "h47vr/camera_readback.hpp"
 #include "h47vr/fingerprint.hpp"
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/hooks.hpp"
@@ -202,6 +203,7 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
     // heartbeat: the engine rewrites the camera from input, so a one-shot write
     // would be lost again immediately.
     CameraProbeFrame(frame);
+    CameraReadbackFrame(frame);
     // Head pose arrives here: posting WM_MOUSEMOVE makes the engine rotate its
     // own camera, so its visibility pass follows and nothing is culled.
     LookDriverFrame(frame);
@@ -285,6 +287,7 @@ void ApplyReinstall() {
     if (gameplay != nullptr) {
         InstallGameplayHooks();
         CameraProbeInstall();
+        CameraReadbackRearm();
     }
     if (renderer != nullptr) {
         RendererProbeReset();

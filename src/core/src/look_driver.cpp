@@ -1,5 +1,6 @@
 #include "h47vr/look_driver.hpp"
 
+#include "h47vr/camera_readback.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
@@ -37,6 +38,17 @@ int g_sent_y = 0;
 int g_rate = 1;
 int g_wait = 0;
 unsigned long g_next_poll = 0;
+unsigned long g_finish_frame = 0;
+unsigned long g_finish_deadline = 0;
+bool g_refresh_after_readback = false;
+bool g_pending_absolute = false;
+bool g_pending_has_yaw = false;
+bool g_pending_has_pitch = false;
+double g_pending_yaw = 0.0;
+double g_pending_pitch = 0.0;
+double g_pending_deg_per_px = 0.0;
+int g_pending_steps = 15;
+int g_pending_rate = 1;
 bool g_reported_window = false;
 
 // Dead reckoning of what we have asked the engine's camera to do. The engine
@@ -49,13 +61,67 @@ bool g_reported_window = false;
 // recentre: yaw=0 still posts exactly the pixels needed to undo the total.
 double g_px_x = 0.0;
 double g_px_y = 0.0;
-// Measured 2026-10-19 in the training level by eye, against the tiled cell:
-// 450 posted pixels read as about 45 degrees and 900 as about 80, so ~0.09
-// deg/px. Two attempts at reading it exactly from the images and one from
-// process memory are recorded as dead ends in docs/HANDOFF.md; the definitive
-// read-back arrives with the camera-yaw work in Milestone 2.
-double g_deg_per_px = 0.09;
-double g_turn_deg_per_px = 0.09;
+// Measured from the engine's live MouseConCam orientation on 2026-10-19:
+// 100 px produced 12.8915 degrees and 450 px produced 58.0120, both 0.128916
+// deg/px. The earlier 0.09 estimate came from looking at the tiled floor.
+constexpr double kReadbackDegPerPixel = 0.1289156;
+double g_deg_per_px = kReadbackDegPerPixel;
+double g_turn_deg_per_px = kReadbackDegPerPixel;
+
+// Absolute aim stays relative to the first MouseConCam pose seen for the
+// current camera object. That preserves `yaw=0` as a recentre even though the
+// engine's own yaw has an arbitrary world-space zero.
+bool g_reference_valid = false;
+void* g_reference_object = nullptr;
+unsigned long g_reference_epoch = 0;
+double g_reference_yaw = 0.0;
+double g_reference_pitch = 0.0;
+
+double Wrap180(double degrees) {
+    while (degrees > 180.0) {
+        degrees -= 360.0;
+    }
+    while (degrees <= -180.0) {
+        degrees += 360.0;
+    }
+    return degrees;
+}
+
+// Yaw is positive to the right. Pitch is positive down, matching the `dy`
+// convention and tools/look.ps1; the engine stores its elevation positive up.
+bool ReadCurrentAim(double* yaw, double* pitch, CameraReadback* readback) {
+    CameraReadback state;
+    if (!CameraReadbackGet(&state)) {
+        return false;
+    }
+    if (!g_reference_valid || state.object != g_reference_object ||
+        state.epoch != g_reference_epoch) {
+        if (g_reference_valid) {
+            g_px_x = 0.0;
+            g_px_y = 0.0;
+        }
+        g_reference_valid = true;
+        g_reference_object = state.object;
+        g_reference_epoch = state.epoch;
+        g_reference_yaw = state.yaw;
+        g_reference_pitch = -state.pitch;
+        H47VR_LOG_INFO("look driver: camera readback reference at object %p: "
+                       "engine yaw=%.3f elevation=%.3f, relative yaw=%.3f pitch=%.3f",
+                       state.object, state.yaw, state.pitch,
+                       Wrap180(state.yaw - g_reference_yaw),
+                       -state.pitch - g_reference_pitch);
+    }
+    if (yaw != nullptr) {
+        *yaw = Wrap180(state.yaw - g_reference_yaw);
+    }
+    if (pitch != nullptr) {
+        *pitch = -state.pitch - g_reference_pitch;
+    }
+    if (readback != nullptr) {
+        *readback = state;
+    }
+    return true;
+}
 
 // Rounds to nearest instead of truncating, so a turn split over N frames lands
 // on the requested pixel count exactly even when the split is not whole
@@ -142,8 +208,18 @@ void WriteState() {
     if (!file) {
         return;
     }
-    file << "yaw=" << g_px_x * g_deg_per_px << " pitch=" << g_px_y * g_deg_per_px
-         << " degperpx=" << g_deg_per_px << " px=" << g_px_x << "," << g_px_y << "\n";
+    CameraReadback readback;
+    double yaw = g_px_x * g_deg_per_px;
+    double pitch = g_px_y * g_deg_per_px;
+    const bool measured = ReadCurrentAim(&yaw, &pitch, &readback);
+    file << "yaw=" << yaw << " pitch=" << pitch
+         << " degperpx=" << g_deg_per_px << " px=" << g_px_x << "," << g_px_y
+         << " source=" << (measured ? "readback" : "estimate");
+    if (measured) {
+        file << " rawyaw=" << readback.yaw << " rawelevation=" << readback.pitch
+             << " camera=" << readback.object << " epoch=" << readback.epoch;
+    }
+    file << "\n";
 }
 
 // The engine's mouse handler re-centres the cursor with SetCursorPos after every
@@ -202,6 +278,28 @@ void PostStep(int stepX, int stepY) {
     }
 }
 
+void BeginTurn(unsigned long frame, int steps, int rate) {
+    g_steps_total = steps;
+    g_steps_done = 0;
+    g_sent_x = 0;
+    g_sent_y = 0;
+    g_rate = rate;
+    g_wait = 0;
+
+    // Recorded because it is the whole point of this route: the messages are
+    // posted into the engine's own queue, so the turn works whether or not the
+    // game owns the foreground. `tools/turn.ps1` needs the foreground; this
+    // does not.
+    const HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+    const HWND foreground = ::GetForegroundWindow();
+    H47VR_LOG_INFO("look driver: turn dx=%d dy=%d over %d frame(s) (rate %d, frame %lu)",
+                   g_dx, g_dy, g_steps_total, g_rate, frame);
+    H47VR_LOG_INFO("look driver: window %p, foreground window %p - %s", window, foreground,
+                   window != nullptr && window == foreground
+                       ? "the game is focused"
+                       : "the game is in the background");
+}
+
 void PollRequest(unsigned long frame) {
     const std::wstring path = JoinPath(mod::GameDirectory(), L"h47vr-look.txt");
     if (!FileExists(path)) {
@@ -227,47 +325,86 @@ void PollRequest(unsigned long frame) {
     g_dy = request.dy;
     g_turn_deg_per_px = request.deg_per_px > 0.0 ? request.deg_per_px : g_deg_per_px;
 
-    // An absolute request is turned into the pixel delta that reaches it. The
-    // engine has no absolute look-at entry point we can call, but it does
-    // integrate deltas - so the target minus our own estimate is the delta.
+    // An absolute request is turned into the pixel delta that reaches it. It
+    // must wait for MouseConCam: before that camera class is active, the engine
+    // can consume the posted messages without turning anything.
     if (request.has_yaw || request.has_pitch) {
-        const double currentYaw = g_px_x * g_turn_deg_per_px;
-        const double currentPitch = g_px_y * g_turn_deg_per_px;
+        CameraReadback readback;
+        double currentYaw = g_px_x * g_turn_deg_per_px;
+        double currentPitch = g_px_y * g_turn_deg_per_px;
+        const bool measured = ReadCurrentAim(&currentYaw, &currentPitch, &readback);
+        if (!measured) {
+            g_pending_absolute = true;
+            g_pending_has_yaw = request.has_yaw;
+            g_pending_has_pitch = request.has_pitch;
+            g_pending_yaw = request.yaw;
+            g_pending_pitch = request.pitch;
+            g_pending_deg_per_px = request.deg_per_px;
+            g_pending_steps = request.steps;
+            g_pending_rate = request.rate;
+            H47VR_LOG_INFO("look driver: absolute aim queued until MouseConCam "
+                           "produces its first readback (yaw=%s%.2f pitch=%s%.2f)",
+                           request.has_yaw ? "" : "hold ", request.yaw,
+                           request.has_pitch ? "" : "hold ", request.pitch);
+            return;
+        }
+        g_refresh_after_readback = false;
         const double targetYaw = request.has_yaw ? request.yaw : currentYaw;
         const double targetPitch = request.has_pitch ? request.pitch : currentPitch;
-        const double deltaX = targetYaw / g_turn_deg_per_px - g_px_x;
-        const double deltaY = targetPitch / g_turn_deg_per_px - g_px_y;
+        const double deltaDegreesYaw = Wrap180(targetYaw - currentYaw);
+        const double deltaDegreesPitch = targetPitch - currentPitch;
+        const double deltaX = deltaDegreesYaw / g_turn_deg_per_px;
+        const double deltaY = deltaDegreesPitch / g_turn_deg_per_px;
         g_dx = static_cast<int>(deltaX < 0 ? deltaX - 0.5 : deltaX + 0.5);
         g_dy = static_cast<int>(deltaY < 0 ? deltaY - 0.5 : deltaY + 0.5);
         H47VR_LOG_INFO("look driver: target yaw=%.2f pitch=%.2f deg (from yaw=%.2f "
-                       "pitch=%.2f, %.4f deg/px) -> dx=%d dy=%d",
+                       "pitch=%.2f, %.4f deg/px, %s) -> dx=%d dy=%d",
                        targetYaw, targetPitch, currentYaw, currentPitch,
-                       g_turn_deg_per_px, g_dx, g_dy);
+                       g_turn_deg_per_px,
+                       measured ? "readback" : "estimate", g_dx, g_dy);
         if (g_dx == 0 && g_dy == 0) {
             H47VR_LOG_INFO("look driver: already at the requested aim");
+            WriteState();
             return;
         }
     }
 
-    g_steps_total = request.steps;
-    g_steps_done = 0;
-    g_sent_x = 0;
-    g_sent_y = 0;
-    g_rate = request.rate;
-    g_wait = 0;
+    BeginTurn(frame, request.steps, request.rate);
+}
 
-    // Recorded because it is the whole point of this route: the messages are
-    // posted into the engine's own queue, so the turn works whether or not the
-    // game owns the foreground. `tools/turn.ps1` needs the foreground; this
-    // does not.
-    const HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
-    const HWND foreground = ::GetForegroundWindow();
-    H47VR_LOG_INFO("look driver: turn dx=%d dy=%d over %d frame(s) (rate %d, frame %lu)",
-                   g_dx, g_dy, g_steps_total, g_rate, frame);
-    H47VR_LOG_INFO("look driver: window %p, foreground window %p - %s", window, foreground,
-                   window != nullptr && window == foreground
-                       ? "the game is focused"
-                       : "the game is in the background");
+void TryPendingAbsolute(unsigned long frame) {
+    if (!g_pending_absolute) {
+        return;
+    }
+
+    CameraReadback readback;
+    double currentYaw = 0.0;
+    double currentPitch = 0.0;
+    if (!ReadCurrentAim(&currentYaw, &currentPitch, &readback)) {
+        return;
+    }
+
+    g_turn_deg_per_px =
+        g_pending_deg_per_px > 0.0 ? g_pending_deg_per_px : g_deg_per_px;
+    const double targetYaw = g_pending_has_yaw ? g_pending_yaw : currentYaw;
+    const double targetPitch = g_pending_has_pitch ? g_pending_pitch : currentPitch;
+    const double deltaX = Wrap180(targetYaw - currentYaw) / g_turn_deg_per_px;
+    const double deltaY = (targetPitch - currentPitch) / g_turn_deg_per_px;
+    g_dx = static_cast<int>(deltaX < 0 ? deltaX - 0.5 : deltaX + 0.5);
+    g_dy = static_cast<int>(deltaY < 0 ? deltaY - 0.5 : deltaY + 0.5);
+
+    const int steps = g_pending_steps;
+    const int rate = g_pending_rate;
+    g_pending_absolute = false;
+    H47VR_LOG_INFO("look driver: MouseConCam readback active; resolving queued target "
+                   "yaw=%.2f pitch=%.2f from yaw=%.2f pitch=%.2f -> dx=%d dy=%d",
+                   targetYaw, targetPitch, currentYaw, currentPitch, g_dx, g_dy);
+    if (g_dx == 0 && g_dy == 0) {
+        H47VR_LOG_INFO("look driver: already at the queued aim");
+        WriteState();
+        return;
+    }
+    BeginTurn(frame, steps, rate);
 }
 
 }  // namespace
@@ -279,7 +416,8 @@ bool LookDriverStart() {
                    "engine's own camera (no focus, no synthetic input)",
                    Narrow(JoinPath(mod::GameDirectory(), L"h47vr-look.txt")).c_str());
     H47VR_LOG_INFO("look driver: absolute aiming available - 'yaw=<deg> pitch=<deg> "
-                   "[degperpx=<deg>]' targets a pose (%.4f deg/px by default, %s)",
+                   "[degperpx=<deg>]' targets a pose (%.7f deg/px from camera "
+                   "readback by default, %s)",
                    g_deg_per_px,
                    Narrow(JoinPath(mod::GameDirectory(), L"h47vr-lookstate.txt")).c_str());
     return true;
@@ -302,6 +440,41 @@ void LookDriverRearm() {
 }
 
 void LookDriverFrame(unsigned long frame) {
+    if (g_finish_frame != 0 && frame >= g_finish_frame) {
+        CameraReadback probe;
+        if (!CameraReadbackGet(&probe) && frame < g_finish_deadline) {
+            g_finish_frame = frame + 4;
+            return;
+        }
+        g_finish_frame = 0;
+        g_finish_deadline = 0;
+        WriteState();
+        ++g_turns;
+        CameraReadback readback;
+        double actualYaw = g_px_x * g_deg_per_px;
+        double actualPitch = g_px_y * g_deg_per_px;
+        const bool measured = ReadCurrentAim(&actualYaw, &actualPitch, &readback);
+        g_refresh_after_readback = !measured;
+        H47VR_LOG_INFO("look driver: turn complete (dx=%d dy=%d, %d message(s), "
+                       "%lu posted so far, %lu failed, now yaw=%.2f pitch=%.2f "
+                       "(%s), frame %lu)",
+                       g_dx, g_dy, g_steps_total, g_messages.load(),
+                       g_post_failures.load(), actualYaw, actualPitch,
+                       measured ? "readback" : "estimate", frame);
+    }
+
+    if (g_refresh_after_readback) {
+        CameraReadback probe;
+        if (CameraReadbackGet(&probe)) {
+            g_refresh_after_readback = false;
+            WriteState();
+            H47VR_LOG_INFO("look driver: MouseConCam readback became active; "
+                           "updated the settled aim state");
+        }
+    }
+
+    TryPendingAbsolute(frame);
+
     if (g_steps_done < g_steps_total) {
         if (g_wait > 0) {
             --g_wait;
@@ -321,14 +494,16 @@ void LookDriverFrame(unsigned long frame) {
             g_px_x += g_dx;
             g_px_y += g_dy;
             g_deg_per_px = g_turn_deg_per_px;
-            WriteState();
-            ++g_turns;
-            H47VR_LOG_INFO("look driver: turn complete (dx=%d dy=%d, %d message(s), "
-                           "%lu posted so far, %lu failed, now yaw=%.2f pitch=%.2f, frame %lu)",
-                           g_dx, g_dy, g_steps_total, g_messages.load(),
-                           g_post_failures.load(), g_px_x * g_deg_per_px,
-                           g_px_y * g_deg_per_px, frame);
+            g_finish_frame = frame + 4;
+            g_finish_deadline = frame + 180;
+            H47VR_LOG_INFO("look driver: turn posted (dx=%d dy=%d), waiting for "
+                           "the engine to settle",
+                           g_dx, g_dy);
         }
+        return;
+    }
+
+    if (g_finish_frame != 0) {
         return;
     }
 

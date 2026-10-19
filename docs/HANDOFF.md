@@ -29,11 +29,13 @@ the operating system's routing, which is what makes focus irrelevant. The engine
 rotates its own camera and its visibility pass follows, so nothing is culled. A
 `SetCursorPos` hook swallows the engine's cursor warp, so a turn no longer steals
 the desktop pointer. A request is either relative pixels (`dx=`/`dy=`) or an
-absolute aim (`yaw=`/`pitch=`); the absolute form is dead-reckoned from the pixel
-total in `h47vr-lookstate.txt`, because the engine has no look-at entry point.
-The scale is a visual estimate of 0.09 deg/px - the three exact methods that were
-tried and failed are under "Dead ends". This is the mechanism the headset will
-drive.
+absolute aim (`yaw=`/`pitch=`). `src/core/src/camera_readback.cpp` now hooks
+`MouseConCam`'s per-frame update and reads the live engine orientation from the
+offset vector at `+0x2d`/`+0x31`/`+0x35`; `h47vr-camread.txt` carries the raw
+pose and `h47vr-lookstate.txt` says whether the result came from `readback` or
+the pre-MouseConCam pixel fallback. The measured scale is **0.1289156 deg/px**
+(100 px = 12.8915 degrees, 450 px = 58.0120), and absolute recentre now returns
+to the actual starting pose. This is the mechanism the headset will drive.
 
 The game's own level start is
 
@@ -165,16 +167,26 @@ A turn can also be an absolute aim rather than a pixel count:
 ./tools/look.ps1 -Pitch -10      # ten degrees up
 ```
 
-The engine integrates deltas and has no look-at entry point, so the driver keeps
-a dead-reckoned estimate, writes it to `h47vr-lookstate.txt`, and posts the
-difference. `degperpx` (default 0.09) is the calibration knob. This is honest
-dead reckoning, not a read-back of the engine's camera: anything else that turns
-the player - a scripted camera, a cutscene, the real mouse - desyncs it until it
-is recentred.
+The engine has no look-at entry point, so absolute requests are still applied as
+pixel deltas. They are now **closed against the engine's pose**, not dead
+reckoning: the MouseConCam update runs first, `camera_readback.cpp` samples the
+offset vector it just wrote, and the driver posts only the difference to the
+requested yaw/pitch. `h47vr-lookstate.txt` reports `source=readback` with
+`rawyaw`, `rawelevation`, the camera object and its epoch. `-DegPerPixel` remains
+available for the fallback path before MouseConCam becomes active; it is not
+needed during gameplay.
 
-The scale is a **visual** estimate, not a measurement: by eye against the tiled
-cell, 450 posted pixels read as about 45 degrees and 900 as about 80. Three
-attempts at something exact all failed, and they are worth not repeating:
+The readback vector is the engine's camera offset behind the player. The values
+are read after the update at `+0x2d`/`+0x31`/`+0x35`; yaw is
+`atan2(-x, -z)` in degrees and engine elevation is `atan2(y, horizontal)`.
+`tools/look.ps1` exposes pitch positive down, so the state file negates engine
+elevation. A controlled 100 px turn produced 12.8915 degrees, 450 px produced
+58.0120 degrees, and a -100 px turn returned exactly to -90.000 yaw / 0.000
+elevation. A live target of yaw 10 / pitch -5 settled at 10.0554 / -5.02771,
+within one pixel of rounding, and recentering to 0 / 0 returned to 0 / 0.
+
+The image- and memory-based calibration attempts remain useful history, but do
+not rebuild them now that the engine pose is readable:
 
 - **Floor-plane homography.** `tools/calibrate-look.py` computes the rotation
   between two captures from the floor, and it is correct on a synthetic 9 degree
@@ -193,10 +205,11 @@ attempts at something exact all failed, and they are worth not repeating:
   scalar angle in a stable field; expect a basis vector or a quaternion, which
   is consistent with the earlier failure to drive the `CamUpdate` basis.
 
-The exact value arrives for free with the Milestone 2 camera work: once the
-world-to-eye transform is readable, it gives the yaw directly. Until then
-`-DegPerPixel` overrides the default per request, and `yaw=0` still recentres
-exactly whatever the scale, because the state is the pixel total.
+An absolute request in a newly loaded level can arrive before MouseConCam is
+active. It is queued rather than posting deltas the engine may ignore; once
+`h47vr-camread.txt` starts updating, the driver takes that first real pose as
+the recenter reference and applies the target from there. Relative `dx`/`dy`
+requests still act immediately and use the pixel integral as their fallback.
 
 The windowed path only acts while the renderer holds the cursor (`renderer+299`,
 set by the `ClipCursor` wrapper at RVA `0x2B640`), which happens in gameplay.
@@ -244,6 +257,7 @@ Control files next to the game (all optional, delete to disable):
 | File | Effect |
 | --- | --- |
 | `h47vr-look.txt` | `dx=<px> dy=<px> [steps=<n>] [rate=<frames>]` - turn the engine's **own** camera by posting `WM_MOUSEMOVE`; no focus needed. Consumed on sight, so one write is one turn (`tools/look.ps1`) |
+| `h47vr-camread.txt` | live MouseConCam pose: `yaw`, engine `pitch` (elevation, positive up), the player-relative offset, camera pointer, epoch and update count |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
@@ -333,9 +347,13 @@ Two things the injected rotation cannot do, both worth remembering:
   call comes from its own mouse handler (`RenderOpenGL` `0x29AC0`..`0x29E50`).
   The swallow counter rises by exactly one per posted message; turns no longer
   move the desktop pointer.
-- **Absolute aim.** `yaw=`/`pitch=` in degrees are turned into the pixel delta
-  that reaches them from the dead-reckoned total, which also makes `yaw=0` an
-  exact recentre at any calibration. Scale currently 0.09 deg/px (visual).
+- **Live camera readback and absolute aim.** `camera_readback.cpp` hooks the
+  MouseConCam per-frame update and reads the offset vector it produced. The
+  measured scale is 0.1289156 deg/px. Absolute requests are closed against this
+  live pose; `h47vr-lookstate.txt` reports `source=readback`, and `yaw=0
+  pitch=0` returns to the engine's actual starting pose. Before MouseConCam
+  becomes active, absolute requests wait for readback; relative turns use the
+  pixel integral.
 
 ## Reverse-engineering map
 
@@ -403,6 +421,13 @@ What reads those accumulators, found with `tools/ghidra/FindScalarRefs.java`
   `+0x85`/`+0x89`, turns it into an aim offset with a `tan` term, and copies the
   input accumulators into its own saved copies at `+0x45`/`+0x49`/`+0x4d`.
   `+0x65`..`+0x71` are four sine sway/bob oscillators.
+- The live camera offset is the float triple at `+0x2d`/`+0x31`/`+0x35`,
+  normalized to the camera distance at `+0x51` and rotated from the input at
+  the start of the same update. The readback hook samples it after
+  `FUN_0fce6f20` returns. Yaw is `atan2(-x, -z)`; elevation is
+  `atan2(y, horizontal)`. The engine's world yaw starts at an arbitrary value
+  (the training level used -90 degrees), so the look driver records the first
+  pose per camera object as its recenter reference.
 - `FUN_0fce6bc0` (RVA `0x26BC0`) is the activation/mode handler beside it; it
   saves the same three accumulators on activation.
 - Other readers of `+0xa95`/`+0xa99`: `FUN_0fce4bb0`, `FUN_0fcee9f0`,
@@ -412,8 +437,9 @@ What reads those accumulators, found with `tools/ghidra/FindScalarRefs.java`
 
 The crosshair is therefore the *aim*: the camera's look offset comes from its
 clamped screen position, while the player's facing comes from the integrated
-mouse delta. That is why dead-reckoned `yaw=` works without a read-back - it is
-tracking the same integral the engine uses.
+mouse delta. The earlier dead reckoning matched that integral; the current
+readback samples the rotated offset vector after each MouseConCam update, so
+scripted turns and other camera movement no longer desync absolute aim.
 
 Front end structure: every screen is an **exported wing group**
 (`_ZWINGROUP_*`) built by a descriptor that stores a script string, a handler, a
@@ -514,8 +540,8 @@ mechanism, not as a camera finder.
   camera sways on four sine oscillators and orbits the player); tile-repeat (the
   cell is too self-similar, no dip anywhere from 100 to 1400 px); and a float
   scan of process memory (`tools/scan-yaw.py` - no stable field, so the yaw is a
-  basis or quaternion rather than a scalar). The exact value comes with the
-  camera read-back below; do not rebuild these.
+  basis or quaternion rather than a scalar). The exact value was obtained from
+  the live MouseConCam offset instead; do not rebuild these methods.
 - **Console `startscene <name>`.** It "succeeds" (`-> 1`) and loads nothing. The
   dispatcher hard-codes `mode 2` and discards the callee's result, so the return
   value never meant anything.
@@ -617,34 +643,25 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 
 ## Immediate next steps
 
-Milestone 2 starts here. The camera is driven; the question is now *reading* it
-and drawing it twice.
+Milestone 2 continues here. The camera is driven and its live pose is readable;
+the question is now drawing it twice from one simulation update.
 
-1. **Read the engine's camera yaw.** This one piece unblocks three things at
-   once: exact look calibration, an absolute (not dead-reckoned) aim for the
-   headset, and the world-to-eye transform stereo needs. The value is computed
-   every frame: `FUN_0fce6f20` (MouseConCam per-frame, RVA `0x26F20`) produces an
-   angle in degrees using the constants at `0x0feb17d0`..`0x0feb17d8` (360, 90,
-   57.29578), so it exists - the job is finding where it lands. `camera_probe.cpp`
-   already hooks `FUN_0fd56120` (CamUpdate) and has candidate tracking; extend it
-   to watch for a rotating basis rather than a scalar angle, since the memory
-   scan proved a scalar is not there. When it reports yaw, wire it into
-   `look_driver.cpp` and real degrees replace `degperpx`.
-2. **Eye loop at the frame boundary.** `RenderOpenGL` RVA `0x0048F0` is the only
+1. **Eye loop at the frame boundary.** `RenderOpenGL` RVA `0x0048F0` is the only
    caller of `SwapBuffers` and runs once per frame; `0x003680` is per-pass
    (17-22 per frame) and is the wrong place. Render both eyes from one simulation
    update.
-3. **Two-eyed projection.** `glFrustum` (34.52 deg fov, near 5, far 16000) and
+2. **Two-eyed projection.** `glFrustum` (34.52 deg fov, near 5, far 16000) and
    the hand-built 45 deg matrix are both already intercepted, so stereo is
    arguments plus a second viewport. The per-eye offset is small, which is the
-   regime where the GL-boundary rotation is safe; if the engine's visibility pass
-   cuts it, that is the signal to move the offset into the engine transform from
-   step 1.
-4. **Redo the world-geometry part of the renderer map.** `objectDrawA`
+   regime where the GL-boundary rotation is safe. The live MouseConCam readback
+   now supplies the world pose; if the engine's visibility pass cuts the eye
+   offset, move that offset into the renderer transform rather than rotating
+   world geometry after culling.
+3. **Redo the world-geometry part of the renderer map.** `objectDrawA`
    (RenderOpenGL RVA `0x6590`) never runs - `glPushMatrix`, `glPopMatrix` and
    `glMultMatrixf` are 0 calls - so the world path is immediate mode:
    `glBegin`/`glEnd` with ~2,900 `glVertex3fv` per frame. "The perspective
    projection is current and vertices are flowing" is a usable level signal that
    needs no eyes.
-5. Install x32dbg if a calling convention ever needs confirming instead of
+4. Install x32dbg if a calling convention ever needs confirming instead of
    deriving (so far deriving from the machine code has been enough).

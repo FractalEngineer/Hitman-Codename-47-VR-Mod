@@ -11,7 +11,8 @@ bool StereoRendererStart();
 void StereoRendererFrame(unsigned long frame);
 
 // Called by the renderer hook. In stereo mode a perspective draw is replayed
-// once per eye; orthographic UI and menu draws pass through unchanged.
+// once per eye while MouseConCam is actively updating. Menus, cutscenes and
+// other non-gameplay cameras pass through once as the theater-mode image.
 void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw);
 
 }  // namespace h47vr

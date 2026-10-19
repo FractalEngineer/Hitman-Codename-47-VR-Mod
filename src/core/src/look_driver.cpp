@@ -110,6 +110,9 @@ double Wrap180(double degrees) {
 // Yaw is positive to the right. Pitch is positive down, matching the `dy`
 // convention and tools/look.ps1; the engine stores its elevation positive up.
 bool ReadCurrentAim(double* yaw, double* pitch, CameraReadback* readback) {
+    if (!CameraReadbackGameplayActive()) {
+        return false;
+    }
     CameraReadback state;
     if (!CameraReadbackGet(&state)) {
         return false;
@@ -536,8 +539,7 @@ void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees) {
 
 void LookDriverFrame(unsigned long frame) {
     if (g_finish_frame != 0 && frame >= g_finish_frame) {
-        CameraReadback probe;
-        if (!CameraReadbackGet(&probe) && frame < g_finish_deadline) {
+        if (!CameraReadbackGameplayActive() && frame < g_finish_deadline) {
             g_finish_frame = frame + 4;
             return;
         }
@@ -559,8 +561,7 @@ void LookDriverFrame(unsigned long frame) {
     }
 
     if (g_refresh_after_readback) {
-        CameraReadback probe;
-        if (CameraReadbackGet(&probe)) {
+        if (CameraReadbackGameplayActive()) {
             g_refresh_after_readback = false;
             WriteState();
             H47VR_LOG_INFO("look driver: MouseConCam readback became active; "

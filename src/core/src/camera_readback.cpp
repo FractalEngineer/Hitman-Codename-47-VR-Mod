@@ -92,6 +92,7 @@ void ObserveAfterUpdate(void* self) {
     g_state.offset[0] = x;
     g_state.offset[1] = y;
     g_state.offset[2] = z;
+    g_state.lastUpdateMs = ::GetTickCount64();
     ++g_state.updates;
 }
 
@@ -128,6 +129,14 @@ bool CameraReadbackGet(CameraReadback* state) {
     return state->valid;
 }
 
+bool CameraReadbackGameplayActive() {
+    CameraReadback state;
+    if (!CameraReadbackGet(&state) || state.lastUpdateMs == 0) {
+        return false;
+    }
+    return ::GetTickCount64() - state.lastUpdateMs <= 250;
+}
+
 bool CameraReadbackInstall() {
     if (g_installed.load()) {
         return true;
@@ -162,6 +171,7 @@ bool CameraReadbackRearm() {
         std::lock_guard<std::mutex> lock(g_state_mutex);
         g_state.valid = false;
         g_state.object = nullptr;
+        g_state.lastUpdateMs = 0;
         ++g_state.epoch;
     }
     return CameraReadbackInstall();

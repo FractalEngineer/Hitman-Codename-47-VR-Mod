@@ -10,7 +10,9 @@
     training-level camera offset suggests 100 game units per metre, so the
     default physical separation is the user's 67 mm IPD. When OpenXR provides
     valid views, their per-eye FOV tangents replace the desktop half-viewport
-    projection scale.
+    projection scale. Immersive duplication is active only while MouseConCam
+    updates recently; the intro, menus and scripted cameras use one theater
+    pass. Current mode is published in h47vr-stereo-state.txt.
 
 .PARAMETER IpdMillimeters
     Physical eye separation in millimetres. Defaults to 67.

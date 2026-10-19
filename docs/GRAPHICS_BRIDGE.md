@@ -156,6 +156,11 @@ in-game cinematics, with immersive stereo only while MouseConCam confirms
 gameplay. Theater mode should submit one flat screen layer rather than
 duplicating those perspective frames per eye.
 
+The desktop renderer now implements that selection: MouseConCam updates remain
+gameplay-fresh for 250 ms, stale/menu/scripted-camera states draw one theater
+pass, and `h47vr-stereo-state.txt` publishes the current mode. The headset layer
+still has to consume this state.
+
 ## Engine constraints to respect
 
 - The engine is documented to misbehave at high frame rates (camera shake,

@@ -311,8 +311,13 @@ the "camera hook" the gate asked for is not needed for it.
 - [~] Hide the player's head and fully separate gameplay camera position from headset orientation.
       The camera can now sit in the head, but head/body hiding, eye-height calibration and the
       final camera/head split remain
-- [ ] Use theater mode for menus, intro cinematics and in-game cinematics; switch to immersive
-      stereo only when MouseConCam confirms gameplay
+- [~] Use theater mode for menus, intro cinematics and in-game cinematics; switch to immersive
+      stereo only when MouseConCam confirms gameplay. The desktop renderer now treats a MouseConCam
+      update as fresh for 250 ms: stale/menu/scripted-camera states draw one theater pass, while
+      gameplay draws the two eye passes. `h47vr-stereo-state.txt` publishes `mode=theater|stereo`.
+      Verified live: the intro reported `mode=theater gameplay=0`, the training level switched to
+      `mode=stereo gameplay=1` only after MouseConCam started updating, and frame cadence stayed
+      60 FPS. A true virtual-screen XR layer remains to be built
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the
@@ -326,6 +331,9 @@ keeps head tracking off when no runtime pose is valid, and preserves closed-loop
 a live headset to exercise its runtime tangents.
 The first-person camera also moved from the 150-unit follow position to a 3-unit in-head position,
 with a clean restoration to the original view when disabled.
+Theater gating was verified across the real transition: the introduction remained
+`mode=theater gameplay=0`; after the level loaded and MouseConCam began updating, the state
+changed to `mode=stereo gameplay=1` and the frame count continued at 60 FPS.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

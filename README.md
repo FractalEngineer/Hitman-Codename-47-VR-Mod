@@ -20,7 +20,8 @@ and swapchain presentation remain. Menus and cinematics are planned for
 theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head hiding and final eye-height calibration
-remain.
+remain. The desktop presentation path now switches between one-pass theater mode
+and gameplay stereo from live MouseConCam freshness.
 
 Milestone 1 established:
 

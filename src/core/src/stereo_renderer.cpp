@@ -1,5 +1,6 @@
 #include "h47vr/stereo_renderer.hpp"
 
+#include "h47vr/camera_readback.hpp"
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
@@ -25,12 +26,42 @@ std::atomic<float> g_eye_separation{kDefaultIpdMillimetres /
                                    (1000.0f / kDefaultGameUnitsPerMetre)};
 std::atomic<unsigned long> g_world_draws{0};
 std::atomic<unsigned long> g_stereo_passes{0};
+std::atomic<unsigned long> g_theater_passes{0};
 std::atomic<bool> g_runtime_pose_seen{false};
 unsigned int g_refresh_ticks = 0;
 float g_loaded_separation = kDefaultIpdMillimetres /
                             (1000.0f / kDefaultGameUnitsPerMetre);
 float g_loaded_ipd_mm = kDefaultIpdMillimetres;
 float g_loaded_units_per_metre = kDefaultGameUnitsPerMetre;
+std::wstring g_state_path;
+bool g_gameplay_active = false;
+int g_last_mode = -1;
+
+const char* ModeName(int mode) {
+    switch (mode) {
+        case 0: return "off";
+        case 1: return "theater";
+        case 2: return "stereo";
+        default: return "?";
+    }
+}
+
+void WriteState() {
+    if (g_state_path.empty()) {
+        return;
+    }
+    std::ofstream file(g_state_path, std::ios::trunc);
+    if (!file) {
+        return;
+    }
+    const int mode = !g_active.load() ? 0 : (g_gameplay_active ? 2 : 1);
+    file << "mode=" << ModeName(mode)
+         << " gameplay=" << (g_gameplay_active ? 1 : 0)
+         << " stereo=" << (g_active.load() ? 1 : 0)
+         << " eye_separation=" << g_eye_separation.load()
+         << " stereo_passes=" << g_stereo_passes.load()
+         << " theater_passes=" << g_theater_passes.load() << "\n";
+}
 
 bool ReadNumber(const std::string& line, const char* key, float* value) {
     const std::string marker = std::string(key) + "=";
@@ -118,18 +149,32 @@ void RefreshStereo() {
 
 bool StereoRendererStart() {
     g_control_path = JoinPath(mod::GameDirectory(), L"h47vr-stereo.txt");
+    g_state_path = JoinPath(mod::GameDirectory(), L"h47vr-stereo-state.txt");
     H47VR_LOG_INFO("stereo renderer: ready - create %s with "
                    "'ipd_mm=<millimetres> units_per_m=<scale>'",
                    Narrow(g_control_path).c_str());
+    H47VR_LOG_INFO("stereo: gameplay state in %s",
+                   Narrow(g_state_path).c_str());
+    WriteState();
     return true;
 }
 
 void StereoRendererFrame(unsigned long frame) {
     RefreshStereo();
+    const int mode = !g_active.load() ? 0 : (g_gameplay_active ? 2 : 1);
+    if (mode != g_last_mode) {
+        g_last_mode = mode;
+        H47VR_LOG_INFO("stereo: presentation mode %s (gameplay=%s)",
+                       ModeName(mode), g_gameplay_active ? "yes" : "no");
+    }
+    if (frame % 30 == 0) {
+        WriteState();
+    }
     if (g_active.load() && frame != 0 && frame % 600 == 0) {
-        H47VR_LOG_INFO("stereo: %lu draw-list calls, %lu pairs rendered for both eyes "
-                       "(frame %lu, eye separation %.3f)",
-                       g_world_draws.load(), g_stereo_passes.load(), frame,
+        H47VR_LOG_INFO("stereo: %lu draw-list calls, %lu stereo pairs, %lu theater "
+                       "passes (frame %lu, eye separation %.3f)",
+                       g_world_draws.load(), g_stereo_passes.load(),
+                       g_theater_passes.load(), frame,
                        g_eye_separation.load());
     }
 }
@@ -141,7 +186,12 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     if (draw == nullptr) {
         return;
     }
-    if (!g_active.load() || !GlStereoAvailable() || !GlStereoPerspective()) {
+    g_gameplay_active = CameraReadbackGameplayActive();
+    if (!g_active.load() || !g_gameplay_active || !GlStereoAvailable() ||
+        !GlStereoPerspective()) {
+        if (g_active.load()) {
+            ++g_theater_passes;
+        }
         draw(self, nullptr, list);
         return;
     }

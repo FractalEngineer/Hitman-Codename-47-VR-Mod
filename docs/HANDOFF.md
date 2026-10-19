@@ -12,10 +12,10 @@ as the work**.
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
 Repo state: local `main` contains `8125855` plus the asymmetric-projection,
-head-tracking and first-person follow-ups described below, while `origin/main`
-remains five commits behind. The game may or may not be running; it keeps
-rendering while the desktop is used, so a session is free to launch it and walk
-away.
+head-tracking, first-person and theater-selection follow-ups described below,
+while `origin/main` remains six commits behind. The game may or may not be
+running; it keeps rendering while the desktop is used, so a session is free to
+launch it and walk away.
 
 ## Where things stand (2026-10-19)
 
@@ -80,6 +80,16 @@ Live verification moved the published offset from `150` to `3`, produced an
 11.51 image difference from the normal follow view, held stereo at 60 FPS, and
 returned to the original `150` offset and a 1.75 difference when disabled. Head
 hiding, eye-height calibration and the final gameplay/head camera split remain.
+
+**Theater/stereo selection is working on the desktop path, 2026-10-19.** A
+MouseConCam update is treated as gameplay only for 250 ms. During the intro,
+menus and scripted cameras the stereo renderer draws one full viewport pass;
+when fresh MouseConCam updates resume it switches to two eye passes.
+`h47vr-stereo-state.txt` reports `mode=off|theater|stereo`, gameplay freshness
+and both pass counters. The live transition was verified: the intro reported
+`mode=theater gameplay=0`, and the training level switched to
+`mode=stereo gameplay=1` only after MouseConCam began updating, at 60 FPS. The
+headset still needs an actual flat virtual-screen layer for theater mode.
 
 The game's own level start is
 
@@ -311,6 +321,7 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale>` sets physical eye separation (`tools/stereo.ps1`) |
 | `h47vr-openxr.txt` | while present, initialize OpenXR on the game's WGL context and use predicted eye X positions when available (`tools/openxr.ps1`) |
 | `h47vr-firstperson.txt` | `distance=<game units>` - replace MouseConCam's 150/100-unit follow targets so the engine places the gameplay camera in the head (`tools/firstperson.ps1`) |
+| `h47vr-stereo-state.txt` | published state: `mode=off\|theater\|stereo`, `gameplay=0\|1`, eye separation and both pass counters |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
@@ -425,6 +436,9 @@ Two things the injected rotation cannot do, both worth remembering:
   immediates are patched only while `h47vr-firstperson.txt` exists. A 3-unit
   target moved the live offset from 150 to 3 with the engine still performing
   collision and visibility; disabling it restored 150 and the normal view.
+- **Theater/stereo auto-selection.** MouseConCam freshness gates immersive
+  duplication. The intro stayed `theater`; gameplay changed to `stereo` after
+  the readback became live, and the frame cadence remained 60 FPS.
 - **OpenXR pose initialization from the game.** The gated backend initializes
   the 32-bit Virtual Desktop runtime inside the game process, creates an
   instance with `XR_KHR_opengl_enable`, reaches the runtime system query and
@@ -739,10 +753,10 @@ are working; the remaining work is to make the stereo match the headset.
 3. **Render to the headset.** Side-by-side on the desktop is the readable test
    target. The shipping path needs per-eye render targets or accepted OpenXR
    swapchain images, plus a single presentation after both eyes are complete.
-4. **Use theater mode outside gameplay.** Menus, the intro and in-game
-   cinematics should appear on one flat virtual screen, not two replicated
-   perspective eyes. Switch to immersive stereo only when MouseConCam confirms
-   gameplay, then retain theater mode for every scripted or menu state.
+4. **Finish theater mode in the headset.** The desktop path now selects one
+   theater pass outside gameplay and two eye passes during fresh MouseConCam
+   updates. Submit that single pass as a flat virtual-screen layer in OpenXR,
+   and use immersive layers only when the state file says `mode=stereo`.
 5. **Finish first person and tune visibility.** The gameplay camera can now sit
    at a 3-unit MouseConCam distance. Hide the player's head while keeping the
    body for shadows and reflections, calibrate eye height and near clipping, and

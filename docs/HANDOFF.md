@@ -11,7 +11,7 @@ as the work**.
 
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
-Everything below is committed and pushed at `5607234`. The game is not running
+Everything below is committed and pushed at `9736907`. The game is not running
 right now. It keeps rendering while you use the desktop, so a session is free to
 launch it and walk away.
 
@@ -64,13 +64,16 @@ view turns. Two rounds of work went into this: the first rotation was built in
 GL's column-major order but applied row by row, which stays orthonormal and so
 never looks broken, only subtly wrong - exactly what the user reported.
 
-**What that approach cannot do, and the next real task: the engine culls before
-we see anything.** It discards geometry outside the frustum of the camera *it*
+**What that rotation cannot do, and the answer to it: the engine culls before we
+see anything.** It discards geometry outside the frustum of the camera *it*
 believes it has, so a large injected yaw shows the scene with pieces missing -
 the user's words were "we're just completely clipping". Rotating vertices cannot
-bring back what was thrown away. The engine's own view has to be driven instead,
-and finding it is the current thread of work; the leads are in the
-reverse-engineering map below.
+bring back what was thrown away, and finding the transform to patch was the wrong
+fix. The right one is to drive the input the engine already reads: with focus
+taken, mouse deltas rotate the engine's own camera and its visibility pass
+follows, so the world stays whole. That is verified and is now the primary route
+(see the next section); the GL-boundary rotation is superseded, kept only as a
+fallback for the sub-degree offsets a head pose actually needs.
 
 ## The tooling can now see and drive the game
 
@@ -291,22 +294,26 @@ suspected pointer: if a candidate is really one object it repeats, and if it is
 per-object it does not. `h47vr-camobj.txt` dumps the captured object's raw words,
 the same words as floats, and the 3x3 behind field `+4`.
 
-**Still missing: the engine's world-to-eye transform, and where it lives is now
-known.** Rotating a gameplay-side camera object's basis does nothing: the whole
+**Not located, and no longer on the critical path: the engine's world-to-eye
+transform.** Nothing is blocked on it any more - free look runs through the
+engine's own input - so what is left here matters only for the eye loop, where a
+per-eye offset has to be injected somewhere the engine's visibility pass cannot
+cut away. Rotating a gameplay-side camera object's basis does nothing: the whole
 set of `CamUpdate` objects was swept, one at a time, and no candidate's `+0x0DA`
 changed the picture at all (differences 1.1-6.4 against a ~6.0 noise floor). The
 vertex stack says why - `Clip` reaches `glVertex3fv` through `RenderOpenGL.dll`
 (`+0x0292FA` -> `+0x004483` -> `+0x008A78`, the direct caller), so the transform is
 applied inside the engine's OpenGL module, not the gameplay module. **Search
-`RenderOpenGL.dll` next.**
+`RenderOpenGL.dll` if a per-eye offset turns out to need it.**
 
 Established: the
 modelview is always identity, the projection is a plain perspective with no
 rotation or translation (checked in a loaded level), and `glMultMatrixf`,
 `glPushMatrix`, `glPopMatrix`, `glRotatef` and `glScalef` are never called at
 all. So the view is applied on the CPU before submission, and the engine culls
-first. Without that transform the view cannot be rotated without the culling
-cutting the scene away.
+first. Without that transform, a rotation *we* apply cannot avoid the culling
+cutting the scene away - which is exactly why free look drives the engine's input
+instead, and why a per-eye offset is the only thing that still wants it.
 
 Where to look next, from call-validated stacks (see below):
 
@@ -430,9 +437,9 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
   logged from the loader-notification thread.
 - PowerShell `-File` splits comma lists into separate argv entries; split inside
   the script.
-- Screenshots from the tooling shell do not work at all here (`PrintWindow`
-  returns black, `CopyFromScreen` and `BitBlt` fail) - see the dead ends. Do not
-  spend a launch on a picture; make the check numeric, or ask the user.
+- Pictures work and are cheap: `tools/capture.ps1` (`-Compare` scores a change
+  against the ~6 noise floor). The old "`PrintWindow` returns black" note was
+  wrong - see the dead ends. Still prefer a numeric check when one exists.
 - The proxy's matrix log is gated on `<game>\h47vr-glmatrix.txt`: the front end
   rewrites its projection and texture matrices every frame and would spend the
   whole budget before a level loads.
@@ -441,17 +448,19 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 
 ## Immediate next steps
 
-1. **Find and drive the engine's world-to-eye transform.** Milestone 1's gate is
-   closed - the user has confirmed the injected view moves - but the vertex-level
-   rotation cannot defeat the engine's culling, so a free look needs the engine's
-   own view driven. The leads are the call-validated stacks under "Still missing"
-   above; `camera_probe.cpp` already hooks `FUN_0fd56120` and captures its stable
-   first stack argument. Once the transform is offset, the same vertex hook is
-   where per-eye rotation and translation belong.
-2. **Make the camera two-eyed.** The projection is set by `glFrustum` (34.52 deg
-   fov, near 5, far 16000) and by hand into a 45 deg matrix; both entries are
-   already intercepted, so stereo is a change of arguments and a second viewport
-   rather than a new hook.
+1. **Put head pose into the engine's own camera.** Free look is already solved
+   *outside* the game - `tools/turn.ps1` takes focus and sends mouse deltas, the
+   engine rotates its own camera, and its visibility pass follows, so nothing is
+   culled. The mod has to do the same in-process: head yaw and pitch become the
+   deltas the engine already consumes. `h47vr-cam.txt` (the GL-boundary rotation)
+   drops to a fallback for the small residual a head pose adds on top.
+2. **Make it two-eyed.** The projection is set by `glFrustum` (34.52 deg fov,
+   near 5, far 16000) and by hand into a 45 deg matrix; both entries are already
+   intercepted, so stereo is a change of arguments and a second viewport rather
+   than a new hook. The per-eye offset is small, which is the regime where the
+   fallback rotation is safe - if it turns out not to be, the engine's
+   world-to-eye transform (search `RenderOpenGL.dll`, see above) is where the
+   offset belongs.
 3. **Redo the world-geometry part of the renderer map.** `objectDrawA`
    (RenderOpenGL RVA `0x6590`) never runs - `glPushMatrix`, `glPopMatrix` and
    `glMultMatrixf` are 0 calls - so the world path is immediate mode:

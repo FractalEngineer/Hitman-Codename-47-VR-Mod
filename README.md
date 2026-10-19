@@ -11,7 +11,12 @@ chat-transcript copy kept as `PLAN.MD.txt`.
 [PLAN.md](PLAN.md) carries the living progress checklist; it is updated in the
 same commit as the work it describes, so it is always the current picture.
 
-Milestone 1 (baseline and integration points) is largely complete:
+Milestone 1 (baseline and integration points) is complete. Milestone 2 is in
+progress: the engine camera pose is read back live, absolute look is closed-loop,
+and a fixed-IPD side-by-side stereo prototype renders both eyes from one
+gameplay update.
+
+Milestone 1 established:
 
 - The install matches every supported-build pin, and the mod refuses to patch
   anything else.

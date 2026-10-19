@@ -37,6 +37,15 @@ the pre-MouseConCam pixel fallback. The measured scale is **0.1289156 deg/px**
 (100 px = 12.8915 degrees, 450 px = 58.0120), and absolute recentre now returns
 to the actual starting pose. This is the mechanism the headset will drive.
 
+**Side-by-side stereo is working, 2026-10-19.** `RenderOpenGL.dll` RVA `0x3680`
+is the face-list draw consumer, not the gameplay update. When a perspective
+projection is current, `stereo_renderer.cpp` calls that consumer twice: once in
+the left half-viewport with eye-space X shifted by `+IPD/2`, then in the right
+half with `-IPD/2`. Projection X is scaled by 0.5 so vertical FOV and half-screen
+aspect stay correct. The training capture shows clear parallax between the two
+eyes, keeps the HUD and subtitles in each eye, and still reports 60 FPS. This is
+a fixed-IPD monitor prototype; OpenXR eye poses and asymmetric frusta are next.
+
 The game's own level start is
 
 ```c
@@ -233,6 +242,8 @@ The fullscreen path at the same handler reads its own remembered cursor position
 ./tools/look.ps1 -Dx 220 -Verify        # relative, in pixels
 ./tools/look.ps1 -Yaw 90 -Verify        # absolute, in degrees from the start
 ./tools/look.ps1 -Yaw 0                 # recentre exactly
+./tools/stereo.ps1 -Ipd 10              # side-by-side stereo prototype
+./tools/stereo.ps1 -Off                 # back to the normal view
 
 # calibration experiments (see Dead ends before using them in anger)
 python tools/calibrate-look.py before.png after.png --px 100 --region 260,150,640,330
@@ -258,6 +269,7 @@ Control files next to the game (all optional, delete to disable):
 | --- | --- |
 | `h47vr-look.txt` | `dx=<px> dy=<px> [steps=<n>] [rate=<frames>]` - turn the engine's **own** camera by posting `WM_MOUSEMOVE`; no focus needed. Consumed on sight, so one write is one turn (`tools/look.ps1`) |
 | `h47vr-camread.txt` | live MouseConCam pose: `yaw`, engine `pitch` (elevation, positive up), the player-relative offset, camera pointer, epoch and update count |
+| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd=<game units>` sets eye separation (`tools/stereo.ps1`) |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
@@ -354,6 +366,13 @@ Two things the injected rotation cannot do, both worth remembering:
   pitch=0` returns to the engine's actual starting pose. Before MouseConCam
   becomes active, absolute requests wait for readback; relative turns use the
   pixel integral.
+- **Side-by-side stereo loop.** The renderer's face-list consumer (`0x3680`) is
+  called twice only while the perspective projection is current. Each eye gets
+  its own half-viewport, a 0.5 X projection scale and an eye-space X offset from
+  `h47vr-stereo.txt`; the original viewport and matrix mode are restored after
+  each pass. The first capture showed 21.46 mean channel difference from the
+  normal view and 7.41 between left and right, with 60 FPS retained. Simulation
+  is not duplicated because this function consumes already-built draw lists.
 
 ## Reverse-engineering map
 
@@ -388,10 +407,13 @@ console/config dispatcher `0xE590`, its line-splitting caller `0x104AD`.
 (`EngineData.cpp`; switches on `Cams`, `Hira`, `Dir`, `HiraClip`, `DirClip`);
 the world vtable is at RVA `0x30298`.
 
-`RenderOpenGL.dll` (loads at `0x0FB70000`): present `0x0048F0` (~1/frame, the
-only caller of `SwapBuffers`), frame draw `0x003680` (~17-22 passes/frame),
-`glDrawElements` candidates `0x006590` and `0x006270`, 2D UI passes `0x004930`,
-`0x005300`, `0x005A10`, `0x005F20`, `0x002EC0`.
+`RenderOpenGL.dll` (loads at `0x0FB70000`): presentation `0x0048F0` (~1/frame,
+calls `glFinish` and `SwapBuffers`), face-list draw consumer `0x003680`
+(`__thiscall(self, list)`, ~21 calls/frame), `glDrawElements` candidates
+`0x006590` and `0x006270`, 2D UI passes `0x004930`, `0x005300`, `0x005A10`,
+`0x005F20`, `0x002EC0`. The renderer vtable used by the present function starts
+at `0xFB9F300`; its `+0x68` slot is the present/sync path and `+0x6C` is
+`0x3680`. The stereo path hooks `0x3680` and replays perspective calls there.
 
 Window and input, same module (found 2026-10-19 with the new
 `tools/ghidra/DumpImportCalls.java`, which dumps call sites for any import by
@@ -643,25 +665,25 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 
 ## Immediate next steps
 
-Milestone 2 continues here. The camera is driven and its live pose is readable;
-the question is now drawing it twice from one simulation update.
+Milestone 2 continues here. The eye loop and a fixed-IPD side-by-side prototype
+are working; the remaining work is to make the stereo match the headset.
 
-1. **Eye loop at the frame boundary.** `RenderOpenGL` RVA `0x0048F0` is the only
-   caller of `SwapBuffers` and runs once per frame; `0x003680` is per-pass
-   (17-22 per frame) and is the wrong place. Render both eyes from one simulation
-   update.
-2. **Two-eyed projection.** `glFrustum` (34.52 deg fov, near 5, far 16000) and
-   the hand-built 45 deg matrix are both already intercepted, so stereo is
-   arguments plus a second viewport. The per-eye offset is small, which is the
-   regime where the GL-boundary rotation is safe. The live MouseConCam readback
-   now supplies the world pose; if the engine's visibility pass cuts the eye
-   offset, move that offset into the renderer transform rather than rotating
-   world geometry after culling.
-3. **Redo the world-geometry part of the renderer map.** `objectDrawA`
-   (RenderOpenGL RVA `0x6590`) never runs - `glPushMatrix`, `glPopMatrix` and
-   `glMultMatrixf` are 0 calls - so the world path is immediate mode:
-   `glBegin`/`glEnd` with ~2,900 `glVertex3fv` per frame. "The perspective
-   projection is current and vertices are flowing" is a usable level signal that
-   needs no eyes.
-4. Install x32dbg if a calling convention ever needs confirming instead of
-   deriving (so far deriving from the machine code has been enough).
+1. **Replace the fixed IPD with runtime eye poses.** Feed the predicated left and
+   right `xrLocateViews` positions into the eye-space offset and build the
+   asymmetric per-eye projection from the runtime tangents. The current
+   half-viewport projection scale is the monitor prototype, not the headset
+   projection path.
+2. **Calibrate game units and eye height.** The 10-unit IPD default is a first
+   test value inferred from the 150-unit follow-camera distance. Measure the
+   training level's geometry and near clip, then express IPD and head translation
+   in metres.
+3. **Render to the headset.** Side-by-side on the desktop is the readable test
+   target. The shipping path needs per-eye render targets or accepted OpenXR
+   swapchain images, plus a single presentation after both eyes are complete.
+4. **Hide the player's head and tune visibility.** The camera is still behind the
+   player model. Separate gameplay camera control from the headset pose and
+   remove only the head, while keeping the body for shadows and reflections.
+5. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so
+   the world path is the immediate-mode `0x3680` face-list consumer. Confirm its
+   state restoration and transparent-pass ordering under heavier scenes, then
+   install x32dbg if a calling convention needs direct confirmation.

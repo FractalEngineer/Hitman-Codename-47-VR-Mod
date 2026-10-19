@@ -6,5 +6,9 @@ namespace h47vr {
 // Null everywhere else, which is what makes the inline wrappers inert.
 GlProbeInstallFn g_gl_probe_install = nullptr;
 GlProbeReportFn g_gl_probe_report = nullptr;
+GlStereoAvailableFn g_gl_stereo_available = nullptr;
+GlStereoPerspectiveFn g_gl_stereo_perspective = nullptr;
+GlStereoBeginEyeFn g_gl_stereo_begin_eye = nullptr;
+GlStereoEndEyeFn g_gl_stereo_end_eye = nullptr;
 
 }  // namespace h47vr

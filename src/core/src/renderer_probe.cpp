@@ -2,6 +2,7 @@
 
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
+#include "h47vr/stereo_renderer.hpp"
 #include "h47vr/symbols.hpp"
 
 #include <windows.h>
@@ -26,15 +27,6 @@ extern "C" __declspec(naked) void h47vr_detour_present() {
     }
 }
 
-extern "C" __declspec(naked) void h47vr_detour_frame_draw() {
-    __asm {
-        pushfd
-        inc dword ptr [h47vr_render_counts + 4]
-        popfd
-        jmp dword ptr [h47vr_render_trampolines + 4]
-    }
-}
-
 extern "C" __declspec(naked) void h47vr_detour_object_draw_a() {
     __asm {
         pushfd
@@ -55,6 +47,12 @@ extern "C" __declspec(naked) void h47vr_detour_object_draw_b() {
 
 namespace h47vr {
 namespace {
+
+void __fastcall HookFrameDraw(void* self, void*, int* list) {
+    ++h47vr_render_counts[1];
+    auto draw = reinterpret_cast<StereoDrawFn>(h47vr_render_trampolines[1]);
+    StereoRendererDrawWorld(self, list, draw);
+}
 
 struct RendererTarget {
     const char* label;
@@ -86,7 +84,7 @@ bool RendererProbeInstall() {
 
     void* detours[] = {
         reinterpret_cast<void*>(&h47vr_detour_present),
-        reinterpret_cast<void*>(&h47vr_detour_frame_draw),
+        reinterpret_cast<void*>(&HookFrameDraw),
         reinterpret_cast<void*>(&h47vr_detour_object_draw_a),
         reinterpret_cast<void*>(&h47vr_detour_object_draw_b),
     };

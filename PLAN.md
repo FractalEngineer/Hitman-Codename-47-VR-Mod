@@ -268,21 +268,35 @@ the "camera hook" the gate asked for is not needed for it.
       uses `h47vr-lookstate.txt` with `source=readback`, while retaining the pixel integral as the
       pre-MouseConCam fallback. Verified live: target 10 / -5 settled at 10.0554 / -5.02771
       (within one pixel of rounding), and a 0 / 0 recenter returned to 0 / 0
-- [~] Update gameplay once, then render both eyes from the same simulation state
-      (frame boundary identified: `RenderOpenGL.dll` RVA `0x0048F0`, the only caller of
-      `SwapBuffers`; measured at ~1 call per frame. `FUN_0fb73680` is per-pass at ~17-18
-      calls per frame, so it is the wrong place for the eye loop)
-- [~] Use the runtime's eye poses and asymmetric projections (runtime side proven by the
-      probe; the renderer side is blocked: `glFrustum` is called from a code region Ghidra
-      has not defined as a function, and recovering it is the next step)
+- [x] **Update gameplay once, then render both eyes from the same simulation state,
+      2026-10-19.** The stereo loop is at `RenderOpenGL.dll` RVA `0x3680`, the draw-list
+      consumer that receives face lists and issues the actual GL batches. It is not the gameplay
+      update. When the perspective projection is current, each call is replayed left then right;
+      orthographic draws still pass through once. HUD and subtitle faces which share the
+      perspective list are duplicated per eye, which is the desired placement for a headset. No
+      simulation, audio or script entry point is entered twice. The earlier `0x0048F0` function
+      was identified correctly as presentation: it calls `glFinish` and `SwapBuffers` but does
+      not draw the scene
+- [~] Use the runtime's eye poses and asymmetric projections. The current prototype uses a
+      configurable fixed IPD and symmetric half-viewports: projection X is scaled by 0.5 so the
+      original vertical FOV is preserved and each half has the correct 2:3 aspect. Perspective
+      vertices receive `+/- IPD/2` in eye-space X. Runtime poses, per-eye asymmetry and a real
+      headset viewport are still required
 - [x] **Apply camera changes before visibility calculation - solved, 2026-10-19, by not
       calculating them here at all.** Because the camera is driven through the engine's own
       input, the engine does the visibility pass itself with the camera it is actually using, so
       there is nothing to expand conservatively and no culled geometry to recover. The
       GL-boundary rotation (which does need this) is superseded and kept only as a fallback
-- [ ] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon events
+- [x] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon
+      events: only the face-list draw consumer is replayed. The training capture remained at
+      60 FPS and the gameplay frame count advanced at the normal cadence
 - [ ] Calibrate game units to metres, eye height and near clipping
 - [ ] Hide the player's head and separate gameplay camera control from headset orientation
+
+Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
+absolute channel value against the normal view. The left and right halves differ by 7.41 mean
+channel value, which is the positional parallax from the 10-unit IPD. The captured view retained
+the HUD and subtitles in each eye and continued to report 60 FPS.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

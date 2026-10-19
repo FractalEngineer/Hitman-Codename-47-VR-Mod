@@ -11,6 +11,7 @@
 #include "h47vr/paths.hpp"
 #include "h47vr/renderer_probe.hpp"
 #include "h47vr/scene_probe.hpp"
+#include "h47vr/stereo_renderer.hpp"
 #include "h47vr/symbols.hpp"
 #include "h47vr/version.hpp"
 #include "h47vr/window_keepalive.hpp"
@@ -204,6 +205,7 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
     // would be lost again immediately.
     CameraProbeFrame(frame);
     CameraReadbackFrame(frame);
+    StereoRendererFrame(frame);
     // Head pose arrives here: posting WM_MOUSEMOVE makes the engine rotate its
     // own camera, so its visibility pass follows and nothing is culled.
     LookDriverFrame(frame);
@@ -393,6 +395,7 @@ bool Initialize(const char* trigger) {
     SceneProbeInstall();
     ConsoleDriverInstall();
     LookDriverStart();
+    StereoRendererStart();
     WatchModuleLoads(L"HitmanDlc.dlc", &RequestReinstall);
     WatchModuleLoads(L"RenderOpenGL.dll", &RequestReinstall);
     WatchModuleLoads(L"System.dll", &RequestReinstall);

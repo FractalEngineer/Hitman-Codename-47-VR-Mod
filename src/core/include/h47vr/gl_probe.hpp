@@ -20,9 +20,17 @@ namespace h47vr {
 // and the seam unavailable rather than half-installed.
 using GlProbeInstallFn = bool (*)(const char* filter);
 using GlProbeReportFn = void (*)(unsigned long);
+using GlStereoAvailableFn = bool (*)();
+using GlStereoPerspectiveFn = bool (*)();
+using GlStereoBeginEyeFn = bool (*)(int eye, float eyeOffset);
+using GlStereoEndEyeFn = void (*)();
 
 extern GlProbeInstallFn g_gl_probe_install;
 extern GlProbeReportFn g_gl_probe_report;
+extern GlStereoAvailableFn g_gl_stereo_available;
+extern GlStereoPerspectiveFn g_gl_stereo_perspective;
+extern GlStereoBeginEyeFn g_gl_stereo_begin_eye;
+extern GlStereoEndEyeFn g_gl_stereo_end_eye;
 
 // Redirects the pipeline entries named by `filter` - a comma-separated list of
 // GL function names, "all" for the whole set, or "none" - and returns false
@@ -41,6 +49,25 @@ inline bool GlProbeInstall(const char* filter) {
 inline void GlProbeReport(unsigned long frame) {
     if (g_gl_probe_report != nullptr) {
         g_gl_probe_report(frame);
+    }
+}
+
+inline bool GlStereoAvailable() {
+    return g_gl_stereo_available != nullptr && g_gl_stereo_available();
+}
+
+inline bool GlStereoPerspective() {
+    return g_gl_stereo_perspective != nullptr && g_gl_stereo_perspective();
+}
+
+inline bool GlStereoBeginEye(int eye, float eyeOffset) {
+    return g_gl_stereo_begin_eye != nullptr &&
+           g_gl_stereo_begin_eye(eye, eyeOffset);
+}
+
+inline void GlStereoEndEye() {
+    if (g_gl_stereo_end_eye != nullptr) {
+        g_gl_stereo_end_eye();
     }
 }
 

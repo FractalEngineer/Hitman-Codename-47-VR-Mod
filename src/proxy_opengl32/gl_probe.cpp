@@ -83,6 +83,14 @@ std::atomic<unsigned long> g_counts[kCountTotal];
 // whole question: the modelview is where the camera lives.
 std::atomic<unsigned int> g_matrix_mode{static_cast<unsigned int>(-1)};
 
+// The engine's most recent full viewport, and the eye state used while a
+// perspective pass is being rendered twice for side-by-side stereo.
+int g_viewport[4] = {0, 0, 800, 600};
+std::atomic<bool> g_stereo_eye_active{false};
+std::atomic<float> g_stereo_eye_offset{0.0f};
+unsigned int g_stereo_saved_matrix_mode = kGlModelview;
+int g_stereo_saved_viewport[4] = {0, 0, 800, 600};
+
 // Log budget. A matrix is rewritten every frame, so it is logged when its
 // values actually change rather than on every call. Each matrix is one line:
 // the camera is found by watching the modelview rows move, and a four-line
@@ -449,6 +457,10 @@ void WINAPI DetourMatrixMode(unsigned int mode) {
 
 void WINAPI DetourViewport(int x, int y, int width, int height) {
     ++g_counts[kViewport];
+    g_viewport[0] = x;
+    g_viewport[1] = y;
+    g_viewport[2] = width;
+    g_viewport[3] = height;
     g_real_viewport(x, y, width, height);
 }
 
@@ -611,9 +623,18 @@ void WINAPI DetourVertex3fv(const float* vertex) {
         DumpStack("glVertex3fv", sample);
     }
     float transformed[3];
+    float x = vertex != nullptr ? vertex[0] : 0.0f;
+    if (vertex != nullptr && g_stereo_eye_active.load() && g_perspective.load()) {
+        x += g_stereo_eye_offset.load();
+    }
     if (vertex != nullptr &&
-        CameraTransform(vertex[0], vertex[1], vertex[2], transformed)) {
+        CameraTransform(x, vertex[1], vertex[2], transformed)) {
         g_real_vertex3fv(transformed);
+        return;
+    }
+    if (vertex != nullptr && x != vertex[0]) {
+        const float shifted[3] = {x, vertex[1], vertex[2]};
+        g_real_vertex3fv(shifted);
         return;
     }
     g_real_vertex3fv(vertex);
@@ -621,6 +642,9 @@ void WINAPI DetourVertex3fv(const float* vertex) {
 
 void WINAPI DetourVertex3f(float x, float y, float z) {
     ++g_counts[kVertex3f];
+    if (g_stereo_eye_active.load() && g_perspective.load()) {
+        x += g_stereo_eye_offset.load();
+    }
     float transformed[3];
     if (CameraTransform(x, y, z, transformed)) {
         g_real_vertex3f(transformed[0], transformed[1], transformed[2]);
@@ -654,6 +678,69 @@ void WINAPI DetourDrawElements(unsigned int mode, int count, unsigned int type,
 void WINAPI DetourDrawArrays(unsigned int mode, int first, int count) {
     ++g_counts[kDrawArrays];
     g_real_draw_arrays(mode, first, count);
+}
+
+// --- stereo eye pass setup --------------------------------------------------
+
+bool StereoAvailableImpl() {
+    return true;
+}
+
+bool StereoPerspectiveImpl() {
+    return g_perspective.load();
+}
+
+bool StereoBeginEyeImpl(int eye, float eyeOffset) {
+    if (!g_perspective.load()) {
+        return false;
+    }
+    bool expected = false;
+    if (!g_stereo_eye_active.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+    if (g_viewport[2] < 2 || g_viewport[3] < 1) {
+        g_stereo_eye_active = false;
+        return false;
+    }
+
+    g_stereo_saved_matrix_mode = g_matrix_mode.load();
+    for (int i = 0; i < 4; ++i) {
+        g_stereo_saved_viewport[i] = g_viewport[i];
+    }
+
+    // Each eye gets half of the original viewport. Scaling projection X by 0.5
+    // keeps the original vertical FOV and gives each half the correct aspect.
+    const float scaleX[16] = {
+        0.5f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f,
+    };
+    g_real_matrix_mode(kGlProjection);
+    g_real_push_matrix();
+    g_real_mult_matrix(scaleX);
+
+    const int halfWidth = g_stereo_saved_viewport[2] / 2;
+    const int eyeX = g_stereo_saved_viewport[0] +
+                     (eye == 0 ? 0 : halfWidth);
+    g_real_viewport(eyeX, g_stereo_saved_viewport[1],
+                    halfWidth, g_stereo_saved_viewport[3]);
+    g_stereo_eye_offset = eyeOffset;
+    return true;
+}
+
+void StereoEndEyeImpl() {
+    if (!g_stereo_eye_active.load()) {
+        return;
+    }
+    g_real_matrix_mode(kGlProjection);
+    g_real_pop_matrix();
+    g_real_matrix_mode(g_stereo_saved_matrix_mode);
+    g_real_viewport(g_stereo_saved_viewport[0], g_stereo_saved_viewport[1],
+                    g_stereo_saved_viewport[2], g_stereo_saved_viewport[3]);
+    g_matrix_mode = g_stereo_saved_matrix_mode;
+    g_stereo_eye_offset = 0.0f;
+    g_stereo_eye_active = false;
 }
 
 // --- installation ----------------------------------------------------------
@@ -844,6 +931,10 @@ void ReportImpl(unsigned long frame) {
 void GlProbePublish() {
     g_gl_probe_install = &InstallImpl;
     g_gl_probe_report = &ReportImpl;
+    g_gl_stereo_available = &StereoAvailableImpl;
+    g_gl_stereo_perspective = &StereoPerspectiveImpl;
+    g_gl_stereo_begin_eye = &StereoBeginEyeImpl;
+    g_gl_stereo_end_eye = &StereoEndEyeImpl;
 }
 
 }  // namespace h47vr

@@ -174,8 +174,8 @@ time by counting calls with convention-agnostic detours.
 
 | Target | RVA | Why it matters | Measured |
 | --- | --- | --- | --- |
-| `FUN_0fb748f0` | `0x0048F0` | the only caller of `SwapBuffers` | present, ~1 per frame (118 in 120) |
-| `FUN_0fb73680` | `0x003680` | `RenderWintelOpenGLDraw.cpp`, 20+ assertions | **~17-18 per frame**, so a per-pass call, not per-frame |
+| `FUN_0fb748f0` | `0x0048F0` | presentation only: calls `glFinish` and `SwapBuffers` | ~1 per frame (118 in 120) |
+| `FUN_0fb73680` | `0x003680` | face-list draw consumer, not the gameplay update | ~21 per frame; **hooked and replayed per perspective eye** |
 | `FUN_0fb76590` | `0x006590` | per-object draw: `glPushMatrix`, `glMultMatrixf`, `glTranslatef`, `glScalef`, `glBindTexture`, `glVertexPointer`, `glDrawElements` | 0 at the front end - world geometry is dormant |
 | `FUN_0fb76270` | `0x006270` | second object path: matrix stack, `glCullFace` | 0 at the front end |
 | `FUN_0fb74930` | `0x004930` | 2D pass: `glOrtho` + `glViewport` + `glBegin`/`glEnd` | menu/UI layer |
@@ -190,17 +190,15 @@ time by counting calls with convention-agnostic detours.
 
 Two consequences for Milestone 2, both from measurement rather than inference:
 
-- The frame boundary is `FUN_0fb748f0`, not `FUN_0fb73680`. It is the one place
-  that runs once per frame and hands the frame to `SwapBuffers`, so the eye loop
-  belongs there.
-- The four `glOrtho` + `glViewport` passes are the 2D UI layers. They are the
-  passes that must **not** be duplicated per eye, which is exactly the
-  "separate world geometry from menus" requirement.
-
-One gap: `glFrustum` is referenced only from `(outside any function)`, so the
-projection setup is in a code region Ghidra has not defined as a function.
-Recovering it is required work, because asymmetric per-eye projections have to
-land there.
+- `0x48F0` is the presentation boundary, not the draw loop. The eye loop belongs
+  at `0x3680`, which receives already-built face lists; replaying it does not
+  run gameplay, audio or scripts again.
+- Perspective calls through `0x3680` are rendered once per eye into half
+  viewports. Orthographic calls remain single. The current fixed-IPD prototype
+  scales X projection by 0.5 and shifts eye-space vertices by `+/- IPD/2`.
+- The fixed-function projection is intercepted in the proxy's GL seam. Runtime
+  asymmetric frusta still need to replace the current symmetric half-viewport
+  scaling when OpenXR poses are wired in.
 
 `RenderOpenGL.dll` loaded at its preferred base `0x0FB70000` in that run, while
 `HitmanDlc.dlc` relocated. Both cases occur, which is why every address in this

@@ -90,6 +90,8 @@ std::atomic<unsigned int> g_matrix_mode{static_cast<unsigned int>(-1)};
 int g_viewport[4] = {0, 0, 800, 600};
 std::atomic<bool> g_stereo_eye_active{false};
 std::atomic<float> g_stereo_eye_offset{0.0f};
+std::atomic<float> g_stereo_eye_roll{0.0f};
+std::atomic<float> g_stereo_eye_pitch{0.0f};
 unsigned int g_stereo_saved_matrix_mode = kGlModelview;
 int g_stereo_saved_viewport[4] = {0, 0, 800, 600};
 unsigned int g_stereo_saved_framebuffer = 0;
@@ -676,16 +678,35 @@ void WINAPI DetourVertex3fv(const float* vertex) {
     }
     float transformed[3];
     float x = vertex != nullptr ? vertex[0] : 0.0f;
+    float y = vertex != nullptr ? vertex[1] : 0.0f;
+    float z = vertex != nullptr ? vertex[2] : 0.0f;
     if (vertex != nullptr && g_stereo_eye_active.load() && g_perspective.load()) {
         x += g_stereo_eye_offset.load();
+        const float roll = g_stereo_eye_roll.load();
+        if (roll != 0.0f) {
+            const float cosine = std::cos(roll);
+            const float sine = std::sin(roll);
+            const float rolledX = x * cosine - y * sine;
+            y = x * sine + y * cosine;
+            x = rolledX;
+        }
+        const float pitch = g_stereo_eye_pitch.load();
+        if (pitch != 0.0f) {
+            const float cosine = std::cos(pitch);
+            const float sine = std::sin(pitch);
+            const float pitchedY = y * cosine - z * sine;
+            z = y * sine + z * cosine;
+            y = pitchedY;
+        }
     }
     if (vertex != nullptr &&
-        CameraTransform(x, vertex[1], vertex[2], transformed)) {
+        CameraTransform(x, y, z, transformed)) {
         g_real_vertex3fv(transformed);
         return;
     }
-    if (vertex != nullptr && x != vertex[0]) {
-        const float shifted[3] = {x, vertex[1], vertex[2]};
+    if (vertex != nullptr &&
+        (x != vertex[0] || y != vertex[1] || z != vertex[2])) {
+        const float shifted[3] = {x, y, z};
         g_real_vertex3fv(shifted);
         return;
     }
@@ -696,6 +717,22 @@ void WINAPI DetourVertex3f(float x, float y, float z) {
     ++g_counts[kVertex3f];
     if (g_stereo_eye_active.load() && g_perspective.load()) {
         x += g_stereo_eye_offset.load();
+        const float roll = g_stereo_eye_roll.load();
+        if (roll != 0.0f) {
+            const float cosine = std::cos(roll);
+            const float sine = std::sin(roll);
+            const float rolledX = x * cosine - y * sine;
+            y = x * sine + y * cosine;
+            x = rolledX;
+        }
+        const float pitch = g_stereo_eye_pitch.load();
+        if (pitch != 0.0f) {
+            const float cosine = std::cos(pitch);
+            const float sine = std::sin(pitch);
+            const float pitchedY = y * cosine - z * sine;
+            z = y * sine + z * cosine;
+            y = pitchedY;
+        }
     }
     float transformed[3];
     if (CameraTransform(x, y, z, transformed)) {
@@ -755,6 +792,8 @@ void StereoSourceSizeImpl(int* width, int* height) {
 }
 
 bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians,
+                        float sceneRollRadians,
+                        float scenePitchRadians,
                         unsigned int framebuffer, int width, int height) {
     if (!g_perspective.load()) {
         return false;
@@ -847,6 +886,8 @@ bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians,
                         halfWidth, g_stereo_saved_viewport[3]);
     }
     g_stereo_eye_offset = eyeOffset;
+    g_stereo_eye_roll = sceneRollRadians;
+    g_stereo_eye_pitch = scenePitchRadians;
     return true;
 }
 
@@ -865,6 +906,8 @@ void StereoEndEyeImpl() {
     g_stereo_framebuffer_changed = false;
     g_matrix_mode = g_stereo_saved_matrix_mode;
     g_stereo_eye_offset = 0.0f;
+    g_stereo_eye_roll = 0.0f;
+    g_stereo_eye_pitch = 0.0f;
     g_stereo_eye_active = false;
 }
 

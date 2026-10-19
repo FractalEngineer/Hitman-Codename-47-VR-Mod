@@ -17,14 +17,16 @@ and a 67 mm side-by-side stereo prototype renders both eyes from one gameplay
 update. A gated OpenXR backend now feeds runtime eye positions, asymmetric FOV
 tangents and predicted head orientation into that path. Gameplay now renders
 directly into depth-complete OpenXR eye swapchains under the SteamVR null HMD;
-physical headset validation remains. Menus and cinematics use
+physical Quest testing has validated the 67 mm IPD, head tracking and theater
+placement. The remaining Milestone 2 blocker is the engine's narrow visibility
+volume, which leaves peripheral geometry missing in the wide XR views. Menus and cinematics use
 theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head hiding and final eye-height calibration
 remain. The desktop presentation path now switches between one-pass theater mode
 and gameplay stereo from live MouseConCam freshness. The OpenXR backend now
 submits theater quads and native per-eye gameplay projection layers through real
-GL swapchains; a physical headset pass remains.
+GL swapchains.
 
 Milestone 1 established:
 

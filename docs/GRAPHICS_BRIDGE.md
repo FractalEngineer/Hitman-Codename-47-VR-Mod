@@ -141,6 +141,11 @@ a deliberate test.
 - The in-game backend reaches `xrGetSystem` on the game's WGL context; it still
   needs a connected headset to validate eye positions, asymmetric tangents and
   head tracking.
+- Physical Quest validation confirmed the 67 mm head-local IPD, head tracking
+  and theater placement. Peripheral geometry remains missing because the engine
+  builds a narrow face list before the XR renderer runs; projection overscan,
+  console `CameraFOV`, and a live change to the serialized 67.4 FOV value did not
+  fix it. The face-list visibility path is the next target.
 - The null-HMD run proves native per-eye rendering and layer submission. The
   acquired 1512x1680 images have 24-bit depth attachments and receive the
   face-list replay directly. A centre readback measured mean luminance

@@ -149,8 +149,8 @@ headers; the modules are relocatable, so never hard-code the VA.
 | 1f | Camera class info | `HitmanDlc.dlc` | `?ZCAMERA_ClassInfo@@3VZCLASSINFOZCAMERA@@A` | `0x00244320` | located |
 | 1g | MouseConCam per-frame update / live pose | `HitmanDlc.dlc` | (not exported) | `0x00026F20` | hooked; yaw/pitch read from `+0x2D/+0x31/+0x35` after update |
 | 1h | MouseConCam follow-distance targets | `HitmanDlc.dlc` | (not exported) | `0x0002714F` / `0x00027158` | gated first-person override; immediates `150.0` / `100.0` |
-| 4 | Visibility / draw distance | `HitmanDlc.dlc` | `_ZGEOM_AdoptVisibility` | `0x00159050` | located |
-| 4a | Visibility query | `HitmanDlc.dlc` | `_ZLIST_CheckVisible` | `0x0014DE30` | located |
+| 4 | Visibility / draw distance | `HitmanDlc.dlc` | `_ZGEOM_AdoptVisibility` | `0x00159050` | descriptor initializer only; helper RVA `0x00159080` is a generic message handler |
+| 4a | Visibility query | `HitmanDlc.dlc` | `_ZLIST_CheckVisible` | `0x0014DE30` | descriptor initializer only; helper RVA `0x0014DE60` is a generic message handler |
 | 5 | Input dispatch | `Globals.dll` | `?g_pSysInput@@3PAVZSysInput@@A` | `0x00003014` | located (singleton pointer) |
 | 5a | Engine entry | `System.dll` | `RunEngine` | `0x0000A790` | located |
 | 5b | Engine print | `System.dll` | `EditPrint` | `0x0000A770` | located |

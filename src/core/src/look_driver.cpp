@@ -28,6 +28,7 @@ std::atomic<unsigned long> g_post_failures{0};
 std::atomic<unsigned long> g_warp_swallowed{0};
 std::atomic<unsigned long> g_head_posts{0};
 std::atomic<bool> g_cursor_guard{false};
+std::atomic<double> g_scene_pitch_degrees{0.0};
 
 // One turn in flight. The turn is split across frames the way a hand moves a
 // mouse, because the engine's handler returns early when the delta is zero and
@@ -68,8 +69,8 @@ double g_head_reference_pitch = 0.0;
 // each posted message within the engine's comfortable range, then let the next
 // frames close the remaining error. The deadband avoids a stream of one-pixel
 // corrections from prediction noise.
-constexpr double kHeadDeadbandDegrees = 0.12;
-constexpr int kHeadMaxPixelsPerFrame = 24;
+constexpr double kHeadDeadbandDegrees = 0.15;
+constexpr int kHeadMaxPixelsPerFrame = 96;
 
 // Dead reckoning of what we have asked the engine's camera to do. The engine
 // integrates the deltas we post into the player's aim, so this stays true as
@@ -449,31 +450,29 @@ void ApplyHeadPose(unsigned long frame) {
     const double targetPitch = -(g_head_pitch - g_head_reference_pitch);
     const double errorYaw = Wrap180(targetYaw - currentYaw);
     const double errorPitch = targetPitch - currentPitch;
-    if (std::fabs(errorYaw) < kHeadDeadbandDegrees &&
-        std::fabs(errorPitch) < kHeadDeadbandDegrees) {
+    // Pitch is rendered directly at the GL seam. Driving it through the
+    // MouseConCam input path moves the follow-camera pivot vertically and
+    // caused a slow sink through the floor.
+    g_scene_pitch_degrees = errorPitch;
+    if (std::fabs(errorYaw) < kHeadDeadbandDegrees) {
         return;
     }
 
     double pixelsX = errorYaw / g_deg_per_px;
-    double pixelsY = errorPitch / g_deg_per_px;
     pixelsX = std::clamp(pixelsX, -static_cast<double>(kHeadMaxPixelsPerFrame),
                          static_cast<double>(kHeadMaxPixelsPerFrame));
-    pixelsY = std::clamp(pixelsY, -static_cast<double>(kHeadMaxPixelsPerFrame),
-                         static_cast<double>(kHeadMaxPixelsPerFrame));
     const int dx = static_cast<int>(pixelsX < 0.0 ? pixelsX - 0.5 : pixelsX + 0.5);
-    const int dy = static_cast<int>(pixelsY < 0.0 ? pixelsY - 0.5 : pixelsY + 0.5);
-    if (dx == 0 && dy == 0) {
+    if (dx == 0) {
         return;
     }
 
-    PostStep(dx, dy);
+    PostStep(dx, 0);
     g_px_x += dx;
-    g_px_y += dy;
     ++g_head_posts;
     if (g_head_posts.load() == 1) {
         H47VR_LOG_INFO("look driver: head tracking active; first correction "
-                       "dx=%d dy=%d (target yaw=%.2f pitch=%.2f, frame %lu)",
-                       dx, dy, targetYaw, targetPitch, frame);
+                       "dx=%d (target yaw=%.2f, scene pitch=%.2f, frame %lu)",
+                       dx, targetYaw, g_scene_pitch_degrees.load(), frame);
     }
 }
 
@@ -516,6 +515,7 @@ void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees) {
         }
         g_head_valid = false;
         g_head_reference_valid = false;
+        g_scene_pitch_degrees = 0.0;
         return;
     }
 
@@ -612,6 +612,10 @@ void LookDriverFrame(unsigned long frame) {
     }
     g_next_poll = frame + 15;
     PollRequest(frame);
+}
+
+double LookDriverScenePitchDegrees() {
+    return g_scene_pitch_degrees.load();
 }
 
 void LookDriverReport(unsigned long frame) {

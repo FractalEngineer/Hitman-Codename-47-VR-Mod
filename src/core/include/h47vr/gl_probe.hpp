@@ -31,6 +31,8 @@ using GlStereoSourceSizeFn = void (*)(int* width, int* height);
 // zero keeps the side-by-side desktop diagnostic.
 using GlStereoBeginEyeFn = bool (*)(int eye, float eyeOffset,
                                    const float* fovRadians,
+                                   float sceneRollRadians,
+                                   float scenePitchRadians,
                                    unsigned int framebuffer, int width,
                                    int height);
 using GlStereoEndEyeFn = void (*)();
@@ -82,11 +84,14 @@ inline bool GlStereoSourceSize(int* width, int* height) {
 
 inline bool GlStereoBeginEye(int eye, float eyeOffset,
                              const float* fovRadians = nullptr,
+                             float sceneRollRadians = 0.0f,
+                             float scenePitchRadians = 0.0f,
                              unsigned int framebuffer = 0, int width = 0,
                              int height = 0) {
     return g_gl_stereo_begin_eye != nullptr &&
-           g_gl_stereo_begin_eye(eye, eyeOffset, fovRadians, framebuffer,
-                                 width, height);
+           g_gl_stereo_begin_eye(eye, eyeOffset, fovRadians,
+                                 sceneRollRadians, scenePitchRadians,
+                                 framebuffer, width, height);
 }
 
 inline void GlStereoEndEye() {

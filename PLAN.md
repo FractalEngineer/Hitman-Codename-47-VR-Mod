@@ -282,12 +282,19 @@ the "camera hook" the gate asked for is not needed for it.
       gated OpenXR session on the game's current WGL context, locates predicted stereo views and
       exposes their eye X positions, FOV tangents and head orientation to the renderer. The proxy
       now replaces the symmetric 0.5 X scale with a per-eye `glFrustum` built from the runtime
-      tangents and the engine's recorded near/far planes. Predicted yaw and pitch drive the
-      engine's own mouse path through `look_driver.cpp`, with first-pose recentering, a small
-      deadband and a per-frame pixel cap. With no active HMD it logs the runtime failure, leaves
+      tangents and the engine's recorded near/far planes. Predicted yaw drives the engine's own
+      mouse path; headset pitch and roll are applied directly to the stereo eye geometry so they
+      cannot move the follow-camera pivot. With no active HMD it logs the runtime failure, leaves
       head tracking off, and keeps the user's 67 mm IPD at 100 game units/metre (6.7 units). Live
       HMD validation of eye separation, tangent orientation, head direction and frame pacing
-      remains
+      remains. Physical Quest validation on 2026-10-20 through VirtualDesktopXR used
+      2412x2596 eye images and measured stable head-local eye X of -0.0332 / +0.0332 m
+      (approximately 67 mm IPD) while yaw and pitch changed. Direct image readback was
+      non-black with a 0.0269 left/right difference. Yaw latency was improved with a 96-pixel
+      correction cap and 0.15-degree deadband. Headset pitch was removed from the MouseConCam
+      feedback loop after it caused floor sinking. Head roll is applied at the GL seam, but the
+      physical direction has not been re-tested after the final sign correction. Full visual
+      convergence, comfort and final frame-pacing tuning remain
 - [x] **Submit real OpenXR frame layers, 2026-10-19.** The gated backend creates two accepted
       OpenGL swapchains at the runtime's recommended size (1512x1680 under SteamVR's null HMD),
       attaches every image to a depth-complete FBO, and releases them at the correct point before
@@ -303,11 +310,17 @@ the "camera hook" the gate asked for is not needed for it.
       pairs, approximately 60 FPS, and a 256x256 centre readback with mean luminance 0.1713/0.1629
       and a 0.0446 left/right difference, proving non-black, non-identical eye images. A physical
       headset pass and visual inspection remain
-- [x] **Apply camera changes before visibility calculation - solved, 2026-10-19, by not
-      calculating them here at all.** Because the camera is driven through the engine's own
-      input, the engine does the visibility pass itself with the camera it is actually using, so
-      there is nothing to expand conservatively and no culled geometry to recover. The
-      GL-boundary rotation (which does need this) is superseded and kept only as a fallback
+- [~] **Expand engine visibility to cover the XR FOV, 2026-10-20 - open blocker.** Driving yaw
+      through the engine input keeps the world coherent during ordinary turns, but the physical
+      Quest exposed that the rendered eye images only contain the central MouseConCam view: the
+      user sees floor and lower walls with black wedges beyond them. Replacing the eye projection
+      with the runtime's asymmetric frustum does not recover geometry the engine already removed.
+      Expanding the intercepted `glFrustum` by 4.25x did not change visibility and damaged
+      cinematic rendering, so it was removed. The live serialized `CameraFOV` double at
+      `HitmanDlc.dlc+0x30054` (67.4) was temporarily changed to 110; it did not solve culling and
+      left only floor and lower walls visible. A failed direct property-setter probe crashed
+      EngineData and was removed. The next step is to find the actual face-list visibility pass,
+      not the GL projection
 - [x] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon
       events: only the face-list draw consumer is replayed. The training capture remained at
       60 FPS and the gameplay frame count advanced at the normal cadence
@@ -315,14 +328,17 @@ the "camera hook" the gate asked for is not needed for it.
       scale is supported by the 150-unit follow-camera distance, 5-unit near plane and 16000-unit
       far plane. The user's physical IPD is 67 mm. Eye height and a stronger geometric calibration
       remain to be measured
-- [x] **Move the gameplay camera into the player, 2026-10-19.** `first_person_camera.cpp` gates an
+- [~] **Move the gameplay camera into the player, 2026-10-19.** `first_person_camera.cpp` gates an
       engine-side override of MouseConCam's two follow-distance targets (`150` normally, `100`
       while leaning). `h47vr-firstperson.txt` requests a distance; the 3-unit default puts the
       camera in the head at the working 100-units-per-metre scale. Verified live: the camera offset
       changed `150 -> 3`, the view changed by 11.51 against the normal follow camera, stereo stayed
       at 60 FPS, and disabling the gate restored the offset to `150` with a 1.75 image difference
-      (the sway noise floor). The engine still performs its own transform, collision and visibility
-      work, so this does not reintroduce culling.
+      (the sway noise floor). MouseConCam's four sway/bob oscillators are zeroed while first person
+      is active, which removed the random camera shake. Engine pitch is no longer driven by the
+      headset because it moved the pivot below the player and caused a slow floor sink; headset
+      pitch and roll now render at the GL seam. The close camera still needs the wider-visibility
+      fix above before it is usable
 - [~] Hide the player's head and fully separate gameplay camera position from headset orientation.
       The camera can now sit in the head, but head/body hiding, eye-height calibration and the
       final camera/head split remain
@@ -332,8 +348,9 @@ the "camera hook" the gate asked for is not needed for it.
       gameplay draws the two eye passes. `h47vr-stereo-state.txt` publishes `mode=theater|stereo`.
       Verified live: the intro reported `mode=theater gameplay=0`, the training level switched to
       `mode=stereo gameplay=1` only after MouseConCam started updating, and frame cadence stayed
-      60 FPS. The headset path now submits that theater image as a quad and gameplay as two
-      projection views under the null HMD; a physical-headset pass remains
+      60 FPS. The headset path now submits that theater image as a head-relative quad at eye
+      height and gameplay as two projection views. Physical testing confirmed the corrected
+      placement and rendering; the previous hard-coded 1.5 m height was too high
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the
@@ -356,6 +373,17 @@ the game remained at 60 FPS. The direct follow-up renders the face-list replay i
 eye images themselves. A centre readback measured mean luminance 0.1713/0.1629 and a 0.0446
 left/right difference, and the desktop SBS blit remains available as a fallback. A physical
 headset is still required to judge lens correction, convergence, comfort and final sharpness.
+
+Physical Quest verification, 2026-10-20: VirtualDesktopXR supplied 2412x2596 eye
+images and a roughly 51-degree inward / 37-degree outward FOV. Head-local eye X
+was stable at -0.0332/+0.0332 m for the user's 67 mm IPD. Zeroing MouseConCam's
+sway oscillators removed most shaking; a faster yaw correction removed most
+fast-turn lag; moving headset pitch out of MouseConCam and into the GL vertex
+path fixed the slow floor sink. Theater height was corrected and confirmed.
+Despite these fixes, the headset still shows mostly floor and lower walls with
+black peripheral wedges. The engine's face-list visibility volume is still too
+narrow for the runtime eye frusta, and that is now the primary Milestone 2
+blocker.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

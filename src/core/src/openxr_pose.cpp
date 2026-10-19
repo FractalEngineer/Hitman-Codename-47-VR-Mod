@@ -796,12 +796,42 @@ const XrCompositionLayerBaseHeader* SubmitPresentation(
         quad.space = g_local_space;
         quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
         SetSubImage(&quad.subImage, 0);
-        quad.pose.orientation.w = 1.0f;
-        quad.pose.position = {0.0f, 1.5f, -2.0f};
+        const XrQuaternionf& head = views[0].pose.orientation;
+        const float forwardX = -2.0f * (head.x * head.z + head.w * head.y);
+        const float forwardY = -2.0f * (head.y * head.z - head.w * head.x);
+        const float forwardZ =
+            -(1.0f - 2.0f * (head.x * head.x + head.y * head.y));
+        constexpr float kTheaterDistance = 1.8f;
+        quad.pose.orientation = head;
+        quad.pose.position = {
+            views[0].pose.position.x + forwardX * kTheaterDistance,
+            views[0].pose.position.y + forwardY * kTheaterDistance,
+            views[0].pose.position.z + forwardZ * kTheaterDistance,
+        };
         quad.size = {1.6f, 1.2f};
         return reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
     }
     return nullptr;
+}
+
+XrVector3f RotateByInverseQuaternion(const XrQuaternionf& q,
+                                     const XrVector3f& v) {
+    // v' = v + 2*w*(u x v) + 2*(u x (u x v)), where u is the inverse
+    // rotation axis (-q.xyz) and w is unchanged for a unit quaternion.
+    const float ux = -q.x;
+    const float uy = -q.y;
+    const float uz = -q.z;
+    const float crossX = uy * v.z - uz * v.y;
+    const float crossY = uz * v.x - ux * v.z;
+    const float crossZ = ux * v.y - uy * v.x;
+    const float cross2X = uy * crossZ - uz * crossY;
+    const float cross2Y = uz * crossX - ux * crossZ;
+    const float cross2Z = ux * crossY - uy * crossX;
+    return {
+        v.x + 2.0f * (q.w * crossX + cross2X),
+        v.y + 2.0f * (q.w * crossY + cross2Y),
+        v.z + 2.0f * (q.w * crossZ + cross2Z),
+    };
 }
 
 bool StartRenderFrame() {
@@ -854,8 +884,26 @@ bool StartRenderFrame() {
     sample.valid = true;
     sample.frame = g_render_frame.predictedDisplayTime;
     sample.fovValid = true;
+    const XrVector3f midpoint = {
+        (g_render_views[0].pose.position.x +
+         g_render_views[1].pose.position.x) *
+            0.5f,
+        (g_render_views[0].pose.position.y +
+         g_render_views[1].pose.position.y) *
+            0.5f,
+        (g_render_views[0].pose.position.z +
+         g_render_views[1].pose.position.z) *
+            0.5f,
+    };
     for (int eye = 0; eye < 2; ++eye) {
-        sample.eyeXMetres[eye] = g_render_views[eye].pose.position.x;
+        const XrVector3f relative = {
+            g_render_views[eye].pose.position.x - midpoint.x,
+            g_render_views[eye].pose.position.y - midpoint.y,
+            g_render_views[eye].pose.position.z - midpoint.z,
+        };
+        const XrVector3f headLocal = RotateByInverseQuaternion(
+            g_render_views[0].pose.orientation, relative);
+        sample.eyeXMetres[eye] = headLocal.x;
         sample.fov[eye][0] = g_render_views[eye].fov.angleLeft;
         sample.fov[eye][1] = g_render_views[eye].fov.angleRight;
         sample.fov[eye][2] = g_render_views[eye].fov.angleUp;
@@ -872,6 +920,27 @@ bool StartRenderFrame() {
         std::atan2(forwardY,
                    std::sqrt(forwardX * forwardX + forwardZ * forwardZ)) *
         57.29577951308232f;
+
+    const float headUpX = 2.0f * (q.x * q.y - q.w * q.z);
+    const float headUpY = 1.0f - 2.0f * (q.x * q.x + q.z * q.z);
+    const float headUpZ = 2.0f * (q.y * q.z + q.w * q.x);
+    float upX = -forwardX * forwardY;
+    float upY = 1.0f - forwardY * forwardY;
+    float upZ = -forwardZ * forwardY;
+    const float upLength = std::sqrt(upX * upX + upY * upY + upZ * upZ);
+    if (upLength > 1e-5f) {
+        upX /= upLength;
+        upY /= upLength;
+        upZ /= upLength;
+        const float crossX = upY * headUpZ - upZ * headUpY;
+        const float crossY = upZ * headUpX - upX * headUpZ;
+        const float crossZ = upX * headUpY - upY * headUpX;
+        const float roll =
+            std::atan2(crossX * forwardX + crossY * forwardY +
+                           crossZ * forwardZ,
+                       upX * headUpX + upY * headUpY + upZ * headUpZ);
+        sample.rollDegrees = roll * 57.29577951308232f;
+    }
 
     std::lock_guard<std::mutex> lock(g_pose_mutex);
     g_pose = sample;
@@ -901,7 +970,7 @@ void ClearDirectTargets() {
 }
 
 void MeasureDirectTargets() {
-    if (++g_direct_frame_count != 10 || g_gl_read_pixels == nullptr) {
+    if (++g_direct_frame_count != 120 || g_gl_read_pixels == nullptr) {
         return;
     }
     constexpr int kSampleSize = 256;

@@ -3,6 +3,7 @@
 #include "h47vr/camera_readback.hpp"
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/log.hpp"
+#include "h47vr/look_driver.hpp"
 #include "h47vr/mod.hpp"
 #include "h47vr/openxr_pose.hpp"
 #include "h47vr/paths.hpp"
@@ -211,6 +212,7 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     OpenXrStereoTarget directTarget;
     bool directStereo = OpenXrBeginStereoTarget(&directTarget);
     OpenXrEyePose runtimePose;
+    float sceneRollRadians = 0.0f;
     if (OpenXrPoseGet(&runtimePose)) {
         // OpenXR X is positive to the right. The vertices are shifted the
         // opposite way, just as with the fixed-IPD fallback.
@@ -220,6 +222,8 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
             leftFov = runtimePose.fov[0];
             rightFov = runtimePose.fov[1];
         }
+        sceneRollRadians =
+            runtimePose.rollDegrees * 0.017453292519943295f;
         if (!g_runtime_pose_seen.exchange(true)) {
             H47VR_LOG_INFO("stereo: using OpenXR eye positions %.4f / %.4f m "
                            "(offsets %.3f / %.3f game units), runtime asymmetric FOV %s",
@@ -230,7 +234,9 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     }
 
     if (!GlStereoBeginEye(
-            0, leftOffset, leftFov,
+            0, leftOffset, leftFov, sceneRollRadians,
+            static_cast<float>(LookDriverScenePitchDegrees() *
+                               0.017453292519943295),
             directStereo ? directTarget.framebuffer[0] : 0,
             directStereo ? directTarget.width : 0,
             directStereo ? directTarget.height : 0)) {
@@ -245,7 +251,9 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     GlStereoEndEye();
 
     if (!GlStereoBeginEye(
-            1, rightOffset, rightFov,
+            1, rightOffset, rightFov, sceneRollRadians,
+            static_cast<float>(LookDriverScenePitchDegrees() *
+                               0.017453292519943295),
             directStereo ? directTarget.framebuffer[1] : 0,
             directStereo ? directTarget.width : 0,
             directStereo ? directTarget.height : 0)) {

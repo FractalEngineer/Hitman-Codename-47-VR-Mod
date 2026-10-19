@@ -18,7 +18,7 @@ with these local commits.
 The game may or may not be running; it keeps rendering while the desktop is used,
 so a session is free to launch it and walk away.
 
-## Where things stand (2026-10-19)
+## Where things stand (2026-10-20)
 
 **The long-standing blocker is gone.** The game can be driven into a level with
 no keyboard input, and `_ZCAMERA_MouseConCam` has now been observed firing in a
@@ -63,14 +63,13 @@ presentation path is described below.
 **Runtime FOV and head orientation are wired into the game, 2026-10-19.** The
 stereo eye pass now receives each view's four FOV tangents. The proxy remembers
 the engine's perspective near/far planes and replaces the desktop half-viewport
-scale with a per-eye `glFrustum` for runtime views. Predicted left-eye yaw and
-pitch feed `look_driver.cpp`, which converts them into the engine's own mouse
-deltas with first-pose recentering, a 0.12-degree deadband and a 24-pixel
-per-frame cap. It only acts while MouseConCam readback is available, so menus and
-cinematics keep their own camera. The no-HMD path was live-tested: OpenXR still
-degrades cleanly, head tracking stays off, stereo holds 60 FPS at 67 mm, and
-closed-loop absolute aim still returns exactly to 0. The runtime tangent branch
-itself needs a live headset.
+scale with a per-eye `glFrustum` for runtime views. Predicted head yaw drives
+the engine's own mouse path through `look_driver.cpp`; pitch and roll are applied
+directly to stereo eye geometry. The final physical tuning uses a 0.15-degree yaw
+deadband and a 96-pixel per-frame cap. Pitch was deliberately removed from the
+MouseConCam path because it moved the close follow-camera pivot vertically and
+caused floor sinking. The no-HMD path still degrades cleanly and keeps fixed-IPD
+stereo running.
 
 **The gameplay camera can now sit in the head, 2026-10-19.** MouseConCam has two
 fixed target follow distances in the supported build: 150 game units normally
@@ -95,7 +94,8 @@ headset path submits that single image as a flat virtual-screen layer.
 **Real OpenXR frame layers now submit, 2026-10-19.** Under SteamVR's null HMD,
 the backend created two 1512x1680 OpenGL swapchains, attached every image to an
 FBO, acquired/waited/released images in the required order, and submitted both
-layer types. Theater mode uses one quad at 2 m; gameplay uses the runtime's two
+layer types. Theater mode uses one head-relative quad 1.8 m forward; gameplay
+uses the runtime's two
 poses and FOVs in a projection layer. The desktop SBS frame is blitted only when
 native eye rendering is unavailable. The game remained at 60 FPS, published eye
 X as approximately +/-0.0315 m, and toggled off cleanly.
@@ -112,6 +112,61 @@ training level completed 79,588 stereo pairs at approximately 60 FPS; a 256x256
 centre readback showed mean luminance 0.1713/0.1629 and a 0.0446 left/right
 difference, proving non-black, non-identical eye images. A physical headset is
 still needed for lens, convergence, comfort and final sharpness.
+
+**Physical Quest pass, 2026-10-20.** VirtualDesktopXR reported 2412x2596
+swapchains and approximately 51-degree inward / 37-degree outward per-eye FOV.
+The live eye vectors initially exposed a coordinate bug: raw LOCAL-space X
+changes as the head rotates, so it is not IPD. `openxr_pose.cpp` now subtracts
+the eye midpoint and rotates the relative vector into head-local space. Across
+a range of head yaw and pitch, the rendered offsets stayed at
+`-0.0332 / +0.0332 m` on the user's 67 mm IPD.
+
+The physical pass also produced these verified fixes:
+
+- MouseConCam's four sway/bob oscillators are zeroed while first-person mode is
+  active, removing most random camera shake.
+- MouseConCam yaw remains the engine-facing turn path. The head yaw correction
+  cap was raised from 18 to 96 pixels per frame and the deadband reduced to
+  0.15 degrees; the user reported the fast-motion lag fixed.
+- Headset pitch no longer goes through MouseConCam. Feeding pitch through mouse
+  deltas moved the close follow-camera pivot downward and caused a slow sink
+  through the floor. Pitch is now applied to the stereo vertices at the GL seam;
+  the user confirmed the sink was resolved.
+- Head roll is applied at the same vertex seam, around the eye forward axis. The
+  first sign was reversed; it was flipped for the final build, but the user
+  stopped headset testing before confirming that last change.
+- Theater mode is now a head-relative quad 1.8 m forward at the current head
+  position and orientation, instead of a hard-coded 1.5 m world height. The user
+  confirmed the theater height and rendering fix.
+
+**Open blocker: peripheral geometry is still culled, 2026-10-20.** The headset
+does not show the full OpenXR FOV. The user sees the floor and lower walls with
+black wedges around them. The eye pass uses the correct runtime asymmetric FOV,
+but the engine has already built a much narrower face list using MouseConCam's
+original visibility volume.
+
+Experiments already tried and ruled out:
+
+- Expanding the intercepted `glFrustum` by 4.25x did not affect the visible face
+  list. It only changed the pre-eye projection and damaged opening/cutscene
+  rendering, so the change was removed.
+- Sending `CameraFOV` through the console dispatcher returned 0 and did not fix
+  the view.
+- A direct call through the world property registry with a string value crashed
+  `EngineData.dll`; the probe was removed.
+- The serialized `CameraFOV` double is 67.4 at `HitmanDlc.dlc+0x30054` in this
+  build. A temporary live write to 110 did not remove the culling and left only
+  floor and lower walls visible. The game was closed, restoring the value.
+- `_ZLIST_CheckVisible` and `_ZGEOM_AdoptVisibility` are descriptor initializers,
+  not boolean cull predicates. Their helper functions at `0xFE0DE60`,
+  `0xFE19080`, `0xFE0E5D0`, and `0xFE0E1A0` are generic event/message handlers.
+  The actual face-list visibility path still needs to be located.
+
+Do not repeat the projection overscan or property-registry calls. Start from the
+face-list construction side. Useful anchors are `FUN_0fd56120` (`CamUpdate`),
+which walks geometry and calls `FUN_0fd53c50` (`Clip`), and
+`FUN_0fe777f0`/`FUN_0fe7b730`, which test bounds/boxes. A debugger session or a
+small non-invasive probe at `CamUpdate` is the likely next route.
 
 The game's own level start is
 
@@ -302,6 +357,9 @@ The fullscreen path at the same handler reads its own remembered cursor position
 # into a level, any time after that, no relaunch and no keyboard
 ./tools/drive.ps1 -Scene 'push:C0_Training\C0_1'
 
+# submit an arbitrary engine command after the level is running
+./tools/drive.ps1 -Scene 'cmd:<name>=<arg>'
+
 # full loop: build, install, launch, watch the log, close
 ./tools/iterate.ps1 -Scene C0_1 -CloseGame
 
@@ -332,6 +390,7 @@ consumed on sight. Its payload decides what happens:
 | Payload | Meaning |
 | --- | --- |
 | `push:<level>` | **the working level load** (game's own slot) |
+| `cmd:<name>=<arg>` | submit an arbitrary engine console command; usable after a level loads |
 | `<mode>:<name>` | call the EngineData command entry directly with that mode |
 | anything else | console `startscene <line>` (dead end, kept for reference) |
 
@@ -453,9 +512,10 @@ Two things the injected rotation cannot do, both worth remembering:
   consumes already-built draw lists.
 - **Runtime eye projection and head feed.** When OpenXR views are valid, eye X
   positions replace the fixed separation, each view's four FOV tangents rebuild
-  the projection through `glFrustum`, and left-eye yaw/pitch drive MouseConCam
-  through the existing no-focus input path. This is integrated and builds, but
-  no connected headset was available to validate the tangent branch.
+  the projection through `glFrustum`, and headset yaw drives MouseConCam through
+  the no-focus input path. Physical Quest testing validated the 67 mm head-local
+  eye separation and asymmetric FOV. Headset pitch and roll are applied at the GL
+  vertex seam to keep the first-person pivot stable.
 - **First-person MouseConCam position.** The supported build's follow-distance
   immediates are patched only while `h47vr-firstperson.txt` exists. A 3-unit
   target moved the live offset from 150 to 3 with the engine still performing
@@ -768,33 +828,36 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 
 ## Immediate next steps
 
-Milestone 2 continues here. The eye loop and a fixed-IPD side-by-side prototype
-are working; the remaining work is to make the stereo match the headset.
+Milestone 2 continues here. Native OpenXR eye rendering, physical 67 mm IPD,
+head tracking and theater placement are working. The blocking issue is the
+engine's narrow visibility/face-list pass.
 
-1. **Validate runtime poses, asymmetric FOV and head tracking.** The backend now
-   feeds predicted eye X, all four FOV tangents and left-eye orientation. With a
-   live Virtual Desktop session, confirm the eye separation is about 67 mm,
-   check that tangent orientation and yaw/pitch direction are correct, and watch
-   frame pacing while the per-frame head corrections are active. The
-   half-viewport scale remains only as the no-runtime desktop fallback.
-2. **Calibrate game units and eye height.** The current profile uses the user's
-   67 mm IPD and a working 100-units-per-metre scale inferred from the 150-unit
-   follow-camera distance. Measure the training level's geometry and near clip,
-   then validate IPD and head translation against physical landmarks.
-3. **Validate native per-eye rendering on the physical headset.** The null-HMD
-   path now renders gameplay face lists directly into depth-complete eye images
-   without the desktop SBS copy. Confirm lens-correct convergence, FOV
-   orientation, expected sharpness and stable frame pacing on the Quest. Check
-   whether orthographic gameplay HUD/UI passes need an explicit per-eye overlay
-   path; the current native path primarily captures the perspective face lists.
-4. **Finish theater mode on the physical headset.** The desktop path selects one
-   theater pass outside gameplay, and OpenXR submits that image as a flat quad.
-   Verify its placement, size and text readability through Virtual Desktop.
-5. **Finish first person and tune visibility.** The gameplay camera can now sit
-   at a 3-unit MouseConCam distance. Hide the player's head while keeping the
-   body for shadows and reflections, calibrate eye height and near clipping, and
-   then split gameplay-facing yaw from residual headset orientation cleanly.
-6. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so
+1. **Fix peripheral culling.** Locate the code that decides which geometry
+   enters the `0x3680` draw lists during `FUN_0fd56120`/`FUN_0fd53c50`. Do not
+   retry `glFrustum` overscan or property-registry calls. The likely route is a
+   debugger breakpoint or non-invasive probe in `CamUpdate`, inspecting the active
+   camera's visibility bounds/FOV and the geometry-list iterator. The required
+   outcome is geometry coverage for the union of both runtime eye frusta, not a
+   wider final GL projection.
+2. **Confirm head roll direction.** The final build flips the roll sign so the
+   scene rotates opposite the headset roll. This has not been tested since the
+   last sign change. Confirm left and right tilt, then adjust only the sign in
+   `stereo_renderer.cpp` if needed.
+3. **Finish the physical visual pass.** Confirm lens-correct convergence,
+   comfort, sharpness and HUD/UI coverage. The native path currently captures
+   perspective face lists; orthographic gameplay UI may still need an explicit
+   per-eye overlay.
+4. **Finish first person.** Hide the player's head while keeping the body for
+   shadows/reflections, calibrate eye height and near clipping, and validate that
+   the direct pitch/roll path stays stable through crouching, leaning and scripted
+   camera changes.
+5. **Calibrate game units.** The working scale is 100 units/metre with the user's
+   67 mm IPD. Validate it against physical level landmarks before tuning movement
+   or eye height.
+6. **Keep theater mode covered.** The head-relative quad is correct on the
+   physical headset; verify text readability and transitions through menus,
+   intro cinematics and in-game cutscenes after the culling work.
+7. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so
    the world path is the immediate-mode `0x3680` face-list consumer. Confirm its
    state restoration and transparent-pass ordering under heavier scenes, then
    install x32dbg if a calling convention needs direct confirmation.

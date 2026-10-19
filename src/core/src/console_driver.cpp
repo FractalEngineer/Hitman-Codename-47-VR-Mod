@@ -264,6 +264,28 @@ void SubmitSceneEntry(int mode, const std::string& name, unsigned long frame) {
                    mode, name.c_str(), result, frame, world);
 }
 
+void SubmitCommandLine(const std::string& line, unsigned long frame) {
+    void* self = InterfaceObject();
+    if (self == nullptr) {
+        H47VR_LOG_WARN("console command: g_pSysInterface is still null (frame %lu)",
+                       frame);
+        return;
+    }
+    const std::size_t split = line.find_first_of("= ");
+    const std::string name = line.substr(0, split);
+    const std::string argument =
+        split == std::string::npos ? std::string() : line.substr(split + 1);
+    if (name.empty()) {
+        H47VR_LOG_WARN("console command: empty command line");
+        return;
+    }
+    h47vr_command_self = self;
+    const int result =
+        h47vr_invoke_command(name.c_str(), argument.c_str());
+    H47VR_LOG_INFO("console command: '%s' arg='%s' -> %d (frame %lu)",
+                   name.c_str(), argument.c_str(), result, frame);
+}
+
 void SubmitScene(const std::string& scene, const char* why, unsigned long frame) {
     void* self = InterfaceObject();
     if (self == nullptr) {
@@ -342,16 +364,6 @@ void ConsoleDriverPump(unsigned long frame) {
         return;
     }
 
-    // World geometry drawing means a level is up, which is the signal the whole
-    // milestone was waiting on.
-    if (h47vr_render_counts[2] != 0) {
-        if (!g_reported_load) {
-            g_reported_load = true;
-            H47VR_LOG_INFO("console driver: world geometry is rendering");
-        }
-        return;
-    }
-
     // On-demand trigger first. Checking for the file is cheap, but there is no
     // need to do it sixty times a second either.
     if (frame % 15 == 0) {
@@ -364,6 +376,10 @@ void ConsoleDriverPump(unsigned long frame) {
                 SubmitPushLevel(go.substr(5), frame);
                 return;
             }
+            if (go.rfind("cmd:", 0) == 0) {
+                SubmitCommandLine(go.substr(4), frame);
+                return;
+            }
             // "<mode>:<name>" calls the scene entry directly with that mode,
             // which is how the engine's own level start gets replayed. Anything
             // else goes through the console command as before.
@@ -374,6 +390,16 @@ void ConsoleDriverPump(unsigned long frame) {
             }
             return;
         }
+    }
+
+    // World geometry drawing means a level is up. Scheduled scene requests are
+    // only for start-up; on-demand commands above remain available afterwards.
+    if (h47vr_render_counts[2] != 0) {
+        if (!g_reported_load) {
+            g_reported_load = true;
+            H47VR_LOG_INFO("console driver: world geometry is rendering");
+        }
+        return;
     }
 
     if (g_scenes.empty()) {

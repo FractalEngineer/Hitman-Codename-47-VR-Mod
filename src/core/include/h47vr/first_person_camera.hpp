@@ -13,5 +13,6 @@ namespace h47vr {
 bool FirstPersonCameraStart();
 void FirstPersonCameraFrame(unsigned long frame);
 void FirstPersonCameraRearm();
+bool FirstPersonCameraActive();
 
 }  // namespace h47vr

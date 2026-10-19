@@ -11,6 +11,7 @@ struct OpenXrEyePose {
     float fov[2][4] = {};
     float yawDegrees = 0.0f;
     float pitchDegrees = 0.0f;
+    float rollDegrees = 0.0f;
     unsigned long long frame = 0;
 };
 

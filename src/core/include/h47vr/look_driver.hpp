@@ -36,6 +36,7 @@ void LookDriverFrame(unsigned long frame);
 // the engine's own mouse deltas, so this remains subject to the same gameplay
 // readback gate as an absolute look request.
 void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees);
+double LookDriverScenePitchDegrees();
 
 // Installs the cursor guard if the renderer is loaded. Safe to call repeatedly,
 // and needs calling again after a module reload drops the patch.

@@ -186,4 +186,8 @@ void FirstPersonCameraRearm() {
     }
 }
 
+bool FirstPersonCameraActive() {
+    return g_active;
+}
+
 }  // namespace h47vr

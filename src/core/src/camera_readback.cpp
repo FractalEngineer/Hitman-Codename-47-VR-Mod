@@ -1,5 +1,6 @@
 #include "h47vr/camera_readback.hpp"
 
+#include "h47vr/first_person_camera.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
@@ -96,10 +97,23 @@ void ObserveAfterUpdate(void* self) {
     ++g_state.updates;
 }
 
+void NeutralizeFirstPersonSway(void* self) {
+    if (!FirstPersonCameraActive() || !Readable(self, kScanBytes)) {
+        return;
+    }
+    auto* base = static_cast<unsigned char*>(self);
+    *reinterpret_cast<float*>(base + 0x65) = 0.0f;
+    *reinterpret_cast<float*>(base + 0x69) = 0.0f;
+    *reinterpret_cast<float*>(base + 0x6d) = 0.0f;
+    *reinterpret_cast<float*>(base + 0x71) = 0.0f;
+}
+
 void __fastcall HookMouseConCamUpdate(void* self, void*) {
+    NeutralizeFirstPersonSway(self);
     if (g_real_update != nullptr) {
         g_real_update(self);
     }
+    NeutralizeFirstPersonSway(self);
     ObserveAfterUpdate(self);
 }
 

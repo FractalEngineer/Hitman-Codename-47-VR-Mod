@@ -208,6 +208,8 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     float rightOffset = -halfSeparation;
     const float* leftFov = nullptr;
     const float* rightFov = nullptr;
+    OpenXrStereoTarget directTarget;
+    bool directStereo = OpenXrBeginStereoTarget(&directTarget);
     OpenXrEyePose runtimePose;
     if (OpenXrPoseGet(&runtimePose)) {
         // OpenXR X is positive to the right. The vertices are shifted the
@@ -227,14 +229,29 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
         }
     }
 
-    if (!GlStereoBeginEye(0, leftOffset, leftFov)) {
+    if (!GlStereoBeginEye(
+            0, leftOffset, leftFov,
+            directStereo ? directTarget.framebuffer[0] : 0,
+            directStereo ? directTarget.width : 0,
+            directStereo ? directTarget.height : 0)) {
+        if (directStereo) {
+            OpenXrCancelStereoTarget();
+            directStereo = false;
+        }
         draw(self, nullptr, list);
         return;
     }
     draw(self, nullptr, list);
     GlStereoEndEye();
 
-    if (!GlStereoBeginEye(1, rightOffset, rightFov)) {
+    if (!GlStereoBeginEye(
+            1, rightOffset, rightFov,
+            directStereo ? directTarget.framebuffer[1] : 0,
+            directStereo ? directTarget.width : 0,
+            directStereo ? directTarget.height : 0)) {
+        if (directStereo) {
+            OpenXrCancelStereoTarget();
+        }
         return;
     }
     draw(self, nullptr, list);

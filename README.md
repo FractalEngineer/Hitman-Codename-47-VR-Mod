@@ -15,15 +15,16 @@ Milestone 1 (baseline and integration points) is complete. Milestone 2 is in
 progress: the engine camera pose is read back live, absolute look is closed-loop,
 and a 67 mm side-by-side stereo prototype renders both eyes from one gameplay
 update. A gated OpenXR backend now feeds runtime eye positions, asymmetric FOV
-tangents and predicted head orientation into that path; live headset validation
-and swapchain presentation remain. Menus and cinematics are planned for
+tangents and predicted head orientation into that path. Gameplay now renders
+directly into depth-complete OpenXR eye swapchains under the SteamVR null HMD;
+physical headset validation remains. Menus and cinematics use
 theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head hiding and final eye-height calibration
 remain. The desktop presentation path now switches between one-pass theater mode
 and gameplay stereo from live MouseConCam freshness. The OpenXR backend now
-submits theater quads and gameplay projection layers through real GL
-swapchains; a physical headset pass and direct per-eye rendering remain.
+submits theater quads and native per-eye gameplay projection layers through real
+GL swapchains; a physical headset pass remains.
 
 Milestone 1 established:
 

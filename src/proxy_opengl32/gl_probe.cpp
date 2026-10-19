@@ -35,6 +35,8 @@ namespace {
 constexpr unsigned int kGlModelview = 0x1700;
 constexpr unsigned int kGlProjection = 0x1701;
 constexpr unsigned int kGlTexture = 0x1702;
+constexpr unsigned int kGlFramebuffer = 0x8D40;
+constexpr unsigned int kGlDrawFramebufferBinding = 0x8CA6;
 
 enum Count {
     kFrustum = 0,
@@ -90,6 +92,8 @@ std::atomic<bool> g_stereo_eye_active{false};
 std::atomic<float> g_stereo_eye_offset{0.0f};
 unsigned int g_stereo_saved_matrix_mode = kGlModelview;
 int g_stereo_saved_viewport[4] = {0, 0, 800, 600};
+unsigned int g_stereo_saved_framebuffer = 0;
+bool g_stereo_framebuffer_changed = false;
 
 // Log budget. A matrix is rewritten every frame, so it is logged when its
 // values actually change rather than on every call. Each matrix is one line:
@@ -334,6 +338,11 @@ using Vertex2fFn = void(WINAPI*)(float, float);
 using VertexPointerFn = void(WINAPI*)(int, unsigned int, unsigned int, const void*);
 using DrawElementsFn = void(WINAPI*)(unsigned int, int, unsigned int, const void*);
 using DrawArraysFn = void(WINAPI*)(unsigned int, int, int);
+using BindFramebufferFn = void(WINAPI*)(unsigned int, unsigned int);
+using GetIntegervFn = void(WINAPI*)(unsigned int, int*);
+using WglGetProcAddressFn = PROC(WINAPI*)(LPCSTR);
+
+int ProxyIndex(const char* name);
 
 FrustumFn g_real_frustum = nullptr;
 FrustumFn g_real_ortho = nullptr;
@@ -360,6 +369,32 @@ Vertex2fFn g_real_vertex2f = nullptr;
 VertexPointerFn g_real_vertex_pointer = nullptr;
 DrawElementsFn g_real_draw_elements = nullptr;
 DrawArraysFn g_real_draw_arrays = nullptr;
+BindFramebufferFn g_real_bind_framebuffer = nullptr;
+GetIntegervFn g_real_get_integer = nullptr;
+
+bool ResolveFramebufferBinding() {
+    if (g_real_bind_framebuffer != nullptr) {
+        return true;
+    }
+    const int wglIndex = ProxyIndex("wglGetProcAddress");
+    if (wglIndex < 0) {
+        return false;
+    }
+    const auto getProcAddress = reinterpret_cast<WglGetProcAddressFn>(
+        h47vr_proxy_slots[wglIndex]);
+    if (getProcAddress == nullptr) {
+        return false;
+    }
+    const void* address = getProcAddress("glBindFramebuffer");
+    if (address == nullptr ||
+        reinterpret_cast<std::uintptr_t>(address) <= 3) {
+        return false;
+    }
+    g_real_bind_framebuffer = reinterpret_cast<BindFramebufferFn>(address);
+    H47VR_LOG_INFO("gl stereo: native eye framebuffer binding resolved at %p",
+                   address);
+    return true;
+}
 
 int g_arg_logs = 0;
 bool g_frustum_reported = false;
@@ -719,8 +754,17 @@ void StereoSourceSizeImpl(int* width, int* height) {
     }
 }
 
-bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians) {
+bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians,
+                        unsigned int framebuffer, int width, int height) {
     if (!g_perspective.load()) {
+        return false;
+    }
+    const bool directTarget = framebuffer != 0 && width > 0 && height > 0;
+    if (directTarget && !ResolveFramebufferBinding()) {
+        return false;
+    }
+    if (directTarget &&
+        (g_real_bind_framebuffer == nullptr || g_real_get_integer == nullptr)) {
         return false;
     }
     bool expected = false;
@@ -735,6 +779,14 @@ bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians) {
     g_stereo_saved_matrix_mode = g_matrix_mode.load();
     for (int i = 0; i < 4; ++i) {
         g_stereo_saved_viewport[i] = g_viewport[i];
+    }
+    g_stereo_saved_framebuffer = 0;
+    g_stereo_framebuffer_changed = directTarget;
+    if (directTarget) {
+        int previous = 0;
+        g_real_get_integer(kGlDrawFramebufferBinding, &previous);
+        g_stereo_saved_framebuffer = static_cast<unsigned int>(previous);
+        g_real_bind_framebuffer(kGlFramebuffer, framebuffer);
     }
 
     g_real_matrix_mode(kGlProjection);
@@ -785,11 +837,15 @@ bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians) {
                        nearPlane, farPlane);
     }
 
-    const int halfWidth = g_stereo_saved_viewport[2] / 2;
-    const int eyeX = g_stereo_saved_viewport[0] +
-                     (eye == 0 ? 0 : halfWidth);
-    g_real_viewport(eyeX, g_stereo_saved_viewport[1],
-                    halfWidth, g_stereo_saved_viewport[3]);
+    if (directTarget) {
+        g_real_viewport(0, 0, width, height);
+    } else {
+        const int halfWidth = g_stereo_saved_viewport[2] / 2;
+        const int eyeX = g_stereo_saved_viewport[0] +
+                         (eye == 0 ? 0 : halfWidth);
+        g_real_viewport(eyeX, g_stereo_saved_viewport[1],
+                        halfWidth, g_stereo_saved_viewport[3]);
+    }
     g_stereo_eye_offset = eyeOffset;
     return true;
 }
@@ -803,6 +859,10 @@ void StereoEndEyeImpl() {
     g_real_matrix_mode(g_stereo_saved_matrix_mode);
     g_real_viewport(g_stereo_saved_viewport[0], g_stereo_saved_viewport[1],
                     g_stereo_saved_viewport[2], g_stereo_saved_viewport[3]);
+    if (g_real_bind_framebuffer != nullptr && g_stereo_framebuffer_changed) {
+        g_real_bind_framebuffer(kGlFramebuffer, g_stereo_saved_framebuffer);
+    }
+    g_stereo_framebuffer_changed = false;
     g_matrix_mode = g_stereo_saved_matrix_mode;
     g_stereo_eye_offset = 0.0f;
     g_stereo_eye_active = false;
@@ -875,6 +935,20 @@ bool InstallImpl(const char* filter) {
     // below replaces a slot, so the real entry point has to be captured before
     // that happens.
     h47vr_proxy_resolve();
+
+    g_real_bind_framebuffer = nullptr;
+    const int getIntegerIndex = ProxyIndex("glGetIntegerv");
+    g_real_get_integer =
+        getIntegerIndex >= 0
+            ? reinterpret_cast<GetIntegervFn>(
+                  h47vr_proxy_slots[getIntegerIndex])
+            : nullptr;
+    if (g_real_get_integer == nullptr) {
+        H47VR_LOG_WARN("gl stereo: glGetIntegerv unavailable");
+    } else {
+        H47VR_LOG_INFO("gl stereo: framebuffer binding will resolve on first "
+                       "native eye draw");
+    }
 
     g_gate_path = JoinPath(mod::GameDirectory(), L"h47vr-glmatrix.txt");
     g_camera_path = JoinPath(mod::GameDirectory(), L"h47vr-cam.txt");

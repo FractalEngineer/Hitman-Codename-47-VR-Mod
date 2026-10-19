@@ -15,7 +15,8 @@ the running game on the game's current WGL context. With no headset streaming,
 on its fixed 67 mm fallback. When views are valid, runtime eye X, asymmetric FOV
 tangents and head orientation feed the stereo renderer and the engine's own
 look-input path. The backend now creates GL swapchains and submits real frame
-layers; a physical-headset validation pass and direct per-eye rendering remain.
+layers. The 2026-10-20 follow-up renders gameplay directly into those eye
+images; a physical-headset validation pass remains.
 
 ## Gate result
 
@@ -140,9 +141,11 @@ a deliberate test.
 - The in-game backend reaches `xrGetSystem` on the game's WGL context; it still
   needs a connected headset to validate eye positions, asymmetric tangents and
   head tracking.
-- The null-HMD run proves swapchain and layer submission, but the image is
-  currently blitted from the desktop side-by-side frame. Direct per-eye render
-  targets are still needed for native sharpness and aspect.
+- The null-HMD run proves native per-eye rendering and layer submission. The
+  acquired 1512x1680 images have 24-bit depth attachments and receive the
+  face-list replay directly. A centre readback measured mean luminance
+  0.1713/0.1629 and a 0.0446 left/right difference. The desktop side-by-side
+  blit remains as the fallback path.
 - Nothing here exercised a real headset. The gate proves API and context
   coexistence, not that frames reach the Quest. That needs a Virtual Desktop
   stream session.
@@ -163,7 +166,10 @@ The desktop renderer now implements that selection: MouseConCam updates remain
 gameplay-fresh for 250 ms, stale/menu/scripted-camera states draw one theater
 pass, and `h47vr-stereo-state.txt` publishes the current mode. The headset layer
 now consumes this state: theater submits a quad, gameplay submits a projection
-layer.
+layer. Gameplay begins the XR frame before the first perspective draw, acquires
+both eye images, and renders the existing face-list replay into their FBOs. If
+native acquisition or binding is unavailable, the renderer reverts to copying
+the desktop side-by-side halves for that frame.
 
 ## Engine constraints to respect
 

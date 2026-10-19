@@ -27,8 +27,12 @@ using GlStereoSourceSizeFn = void (*)(int* width, int* height);
 // angleDown]. When it is present the proxy rebuilds the projection from the
 // runtime frustum and the current perspective near/far planes; when it is null
 // the half-viewport scale used by the desktop prototype remains in effect.
+// A non-zero framebuffer selects a native eye target with the supplied size;
+// zero keeps the side-by-side desktop diagnostic.
 using GlStereoBeginEyeFn = bool (*)(int eye, float eyeOffset,
-                                   const float* fovRadians);
+                                   const float* fovRadians,
+                                   unsigned int framebuffer, int width,
+                                   int height);
 using GlStereoEndEyeFn = void (*)();
 
 extern GlProbeInstallFn g_gl_probe_install;
@@ -77,9 +81,12 @@ inline bool GlStereoSourceSize(int* width, int* height) {
 }
 
 inline bool GlStereoBeginEye(int eye, float eyeOffset,
-                             const float* fovRadians = nullptr) {
+                             const float* fovRadians = nullptr,
+                             unsigned int framebuffer = 0, int width = 0,
+                             int height = 0) {
     return g_gl_stereo_begin_eye != nullptr &&
-           g_gl_stereo_begin_eye(eye, eyeOffset, fovRadians);
+           g_gl_stereo_begin_eye(eye, eyeOffset, fovRadians, framebuffer,
+                                 width, height);
 }
 
 inline void GlStereoEndEye() {

@@ -15,6 +15,7 @@
 
 #include <GL/gl.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -48,14 +49,22 @@ XrSessionState g_session_state = XR_SESSION_STATE_UNKNOWN;
 // scaling the engine's completed backbuffer into them. The engine itself is GL
 // 1.1, so these come from the driver through wglGetProcAddress.
 constexpr GLenum kGlFramebuffer = 0x8D40;
+constexpr GLenum kGlRenderbuffer = 0x8D41;
 constexpr GLenum kGlReadFramebuffer = 0x8CA8;
 constexpr GLenum kGlDrawFramebuffer = 0x8CA9;
 constexpr GLenum kGlReadFramebufferBinding = 0x8CAA;
 constexpr GLenum kGlDrawFramebufferBinding = 0x8CA6;
+constexpr GLenum kGlRenderbufferBinding = 0x8CA7;
 constexpr GLenum kGlColorAttachment0 = 0x8CE0;
+constexpr GLenum kGlDepthAttachment = 0x8D00;
 constexpr GLenum kGlFramebufferComplete = 0x8CD5;
 constexpr GLenum kGlTexture2d = 0x0DE1;
 constexpr GLenum kGlRgba8 = 0x8058;
+constexpr GLenum kGlDepthComponent24 = 0x81A6;
+constexpr GLenum kGlScissorTest = 0x0C11;
+constexpr GLbitfield kGlColorBufferBit = 0x00004000;
+constexpr GLbitfield kGlDepthBufferBit = 0x00000100;
+constexpr GLbitfield kGlAllAttribBits = 0xFFFFFFFF;
 
 struct EyeSwapchain {
     XrSwapchain handle = XR_NULL_HANDLE;
@@ -63,6 +72,7 @@ struct EyeSwapchain {
     uint32_t height = 0;
     std::vector<XrSwapchainImageOpenGLKHR> images;
     std::vector<GLuint> framebuffers;
+    std::vector<GLuint> depthRenderbuffers;
 };
 
 EyeSwapchain g_eyes[2];
@@ -70,6 +80,15 @@ GLenum g_swapchain_format = kGlRgba8;
 bool g_presentation_ready = false;
 int g_last_submitted_mode = -1;
 uint32_t g_acquired_images[2] = {UINT32_MAX, UINT32_MAX};
+XrFrameState g_render_frame{XR_TYPE_FRAME_STATE};
+XrView g_render_views[2] = {
+    XrView{XR_TYPE_VIEW},
+    XrView{XR_TYPE_VIEW},
+};
+bool g_render_frame_open = false;
+bool g_direct_stereo = false;
+bool g_render_views_valid = false;
+unsigned long g_direct_frame_count = 0;
 
 using WglGetProcAddressFn = PROC(WINAPI*)(LPCSTR);
 using GlGenFramebuffersFn = void(APIENTRY*)(GLsizei, GLuint*);
@@ -82,6 +101,23 @@ using GlBlitFramebufferFn = void(APIENTRY*)(GLint, GLint, GLint, GLint, GLint,
                                             GLint, GLint, GLint, GLbitfield,
                                             GLenum);
 using GlGetIntegervFn = void(APIENTRY*)(GLenum, GLint*);
+using GlGenRenderbuffersFn = void(APIENTRY*)(GLsizei, GLuint*);
+using GlBindRenderbufferFn = void(APIENTRY*)(GLenum, GLuint);
+using GlRenderbufferStorageFn =
+    void(APIENTRY*)(GLenum, GLenum, GLsizei, GLsizei);
+using GlFramebufferRenderbufferFn =
+    void(APIENTRY*)(GLenum, GLenum, GLenum, GLuint);
+using GlDeleteRenderbuffersFn = void(APIENTRY*)(GLsizei, const GLuint*);
+using GlClearFn = void(APIENTRY*)(GLbitfield);
+using GlClearColorFn = void(APIENTRY*)(GLfloat, GLfloat, GLfloat, GLfloat);
+using GlColorMaskFn = void(APIENTRY*)(GLboolean, GLboolean, GLboolean,
+                                      GLboolean);
+using GlDepthMaskFn = void(APIENTRY*)(GLboolean);
+using GlDisableFn = void(APIENTRY*)(GLenum);
+using GlPushAttribFn = void(APIENTRY*)(GLbitfield);
+using GlVoidFn = void(APIENTRY*)();
+using GlReadPixelsFn = void(APIENTRY*)(GLint, GLint, GLsizei, GLsizei,
+                                       GLenum, GLenum, void*);
 
 GlGenFramebuffersFn g_gl_gen_framebuffers = nullptr;
 GlBindFramebufferFn g_gl_bind_framebuffer = nullptr;
@@ -90,6 +126,21 @@ GlCheckFramebufferStatusFn g_gl_check_framebuffer_status = nullptr;
 GlDeleteFramebuffersFn g_gl_delete_framebuffers = nullptr;
 GlBlitFramebufferFn g_gl_blit_framebuffer = nullptr;
 GlGetIntegervFn g_gl_get_integer = nullptr;
+GlGenRenderbuffersFn g_gl_gen_renderbuffers = nullptr;
+GlBindRenderbufferFn g_gl_bind_renderbuffer = nullptr;
+GlRenderbufferStorageFn g_gl_renderbuffer_storage = nullptr;
+GlFramebufferRenderbufferFn g_gl_framebuffer_renderbuffer = nullptr;
+GlDeleteRenderbuffersFn g_gl_delete_renderbuffers = nullptr;
+GlClearFn g_gl_clear = nullptr;
+GlClearColorFn g_gl_clear_color = nullptr;
+GlColorMaskFn g_gl_color_mask = nullptr;
+GlDepthMaskFn g_gl_depth_mask = nullptr;
+GlDisableFn g_gl_disable = nullptr;
+GlPushAttribFn g_gl_push_attrib = nullptr;
+GlVoidFn g_gl_pop_attrib = nullptr;
+GlReadPixelsFn g_gl_read_pixels = nullptr;
+
+void ReleaseAcquiredImages();
 
 void* GlProcedure(HMODULE openGl, WglGetProcAddressFn getProcAddress,
                   const char* name) {
@@ -224,12 +275,48 @@ bool LoadGlPresentationFunctions() {
         GlProcedure(openGl, getProcAddress, "glBlitFramebuffer"));
     g_gl_get_integer = reinterpret_cast<GlGetIntegervFn>(
         GlProcedure(openGl, getProcAddress, "glGetIntegerv"));
+    g_gl_gen_renderbuffers = reinterpret_cast<GlGenRenderbuffersFn>(
+        GlProcedure(openGl, getProcAddress, "glGenRenderbuffers"));
+    g_gl_bind_renderbuffer = reinterpret_cast<GlBindRenderbufferFn>(
+        GlProcedure(openGl, getProcAddress, "glBindRenderbuffer"));
+    g_gl_renderbuffer_storage = reinterpret_cast<GlRenderbufferStorageFn>(
+        GlProcedure(openGl, getProcAddress, "glRenderbufferStorage"));
+    g_gl_framebuffer_renderbuffer =
+        reinterpret_cast<GlFramebufferRenderbufferFn>(
+            GlProcedure(openGl, getProcAddress, "glFramebufferRenderbuffer"));
+    g_gl_delete_renderbuffers = reinterpret_cast<GlDeleteRenderbuffersFn>(
+        GlProcedure(openGl, getProcAddress, "glDeleteRenderbuffers"));
+    g_gl_clear = reinterpret_cast<GlClearFn>(
+        GlProcedure(openGl, getProcAddress, "glClear"));
+    g_gl_clear_color = reinterpret_cast<GlClearColorFn>(
+        GlProcedure(openGl, getProcAddress, "glClearColor"));
+    g_gl_color_mask = reinterpret_cast<GlColorMaskFn>(
+        GlProcedure(openGl, getProcAddress, "glColorMask"));
+    g_gl_depth_mask = reinterpret_cast<GlDepthMaskFn>(
+        GlProcedure(openGl, getProcAddress, "glDepthMask"));
+    g_gl_disable = reinterpret_cast<GlDisableFn>(
+        GlProcedure(openGl, getProcAddress, "glDisable"));
+    g_gl_push_attrib = reinterpret_cast<GlPushAttribFn>(
+        GlProcedure(openGl, getProcAddress, "glPushAttrib"));
+    g_gl_pop_attrib = reinterpret_cast<GlVoidFn>(
+        GlProcedure(openGl, getProcAddress, "glPopAttrib"));
+    g_gl_read_pixels = reinterpret_cast<GlReadPixelsFn>(
+        GlProcedure(openGl, getProcAddress, "glReadPixels"));
     return g_gl_gen_framebuffers != nullptr &&
            g_gl_bind_framebuffer != nullptr &&
            g_gl_framebuffer_texture_2d != nullptr &&
            g_gl_check_framebuffer_status != nullptr &&
            g_gl_delete_framebuffers != nullptr &&
-           g_gl_blit_framebuffer != nullptr && g_gl_get_integer != nullptr;
+           g_gl_blit_framebuffer != nullptr && g_gl_get_integer != nullptr &&
+           g_gl_gen_renderbuffers != nullptr &&
+           g_gl_bind_renderbuffer != nullptr &&
+           g_gl_renderbuffer_storage != nullptr &&
+           g_gl_framebuffer_renderbuffer != nullptr &&
+           g_gl_delete_renderbuffers != nullptr && g_gl_clear != nullptr &&
+           g_gl_clear_color != nullptr && g_gl_color_mask != nullptr &&
+           g_gl_depth_mask != nullptr && g_gl_disable != nullptr &&
+           g_gl_push_attrib != nullptr && g_gl_pop_attrib != nullptr &&
+           g_gl_read_pixels != nullptr;
 }
 
 void DestroyEyeSwapchain(EyeSwapchain& eye) {
@@ -239,6 +326,13 @@ void DestroyEyeSwapchain(EyeSwapchain& eye) {
             eye.framebuffers.data());
     }
     eye.framebuffers.clear();
+    if (!eye.depthRenderbuffers.empty() &&
+        g_gl_delete_renderbuffers != nullptr) {
+        g_gl_delete_renderbuffers(
+            static_cast<GLsizei>(eye.depthRenderbuffers.size()),
+            eye.depthRenderbuffers.data());
+    }
+    eye.depthRenderbuffers.clear();
     eye.images.clear();
     if (eye.handle != XR_NULL_HANDLE) {
         ::xrDestroySwapchain(eye.handle);
@@ -249,11 +343,24 @@ void DestroyEyeSwapchain(EyeSwapchain& eye) {
 }
 
 void DestroyGraphics() {
+    if (g_render_frame_open && g_session != XR_NULL_HANDLE) {
+        XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
+        endInfo.displayTime = g_render_frame.predictedDisplayTime;
+        endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        endInfo.layerCount = 0;
+        endInfo.layers = nullptr;
+        ::xrEndFrame(g_session, &endInfo);
+        g_render_frame_open = false;
+    }
+    ReleaseAcquiredImages();
     for (EyeSwapchain& eye : g_eyes) {
         DestroyEyeSwapchain(eye);
     }
     g_presentation_ready = false;
     g_last_submitted_mode = -1;
+    g_render_frame_open = false;
+    g_direct_stereo = false;
+    g_render_views_valid = false;
 }
 
 void ShutdownXr() {
@@ -330,18 +437,32 @@ bool CreateEyeSwapchain(XrViewConfigurationView view, EyeSwapchain& eye,
     }
     eye.images.resize(imageCount);
     eye.framebuffers.resize(imageCount, 0);
+    eye.depthRenderbuffers.resize(imageCount, 0);
 
     GLint previousFramebuffer = 0;
+    GLint previousRenderbuffer = 0;
     g_gl_get_integer(kGlDrawFramebufferBinding, &previousFramebuffer);
+    g_gl_get_integer(kGlRenderbufferBinding, &previousRenderbuffer);
     for (uint32_t i = 0; i < imageCount; ++i) {
         g_gl_gen_framebuffers(1, &eye.framebuffers[i]);
+        g_gl_gen_renderbuffers(1, &eye.depthRenderbuffers[i]);
+        g_gl_bind_renderbuffer(kGlRenderbuffer, eye.depthRenderbuffers[i]);
+        g_gl_renderbuffer_storage(
+            kGlRenderbuffer, kGlDepthComponent24,
+            static_cast<GLsizei>(eye.width),
+            static_cast<GLsizei>(eye.height));
         g_gl_bind_framebuffer(kGlFramebuffer, eye.framebuffers[i]);
         g_gl_framebuffer_texture_2d(kGlFramebuffer, kGlColorAttachment0,
                                     kGlTexture2d, eye.images[i].image, 0);
+        g_gl_framebuffer_renderbuffer(kGlFramebuffer, kGlDepthAttachment,
+                                      kGlRenderbuffer,
+                                      eye.depthRenderbuffers[i]);
         if (g_gl_check_framebuffer_status(kGlFramebuffer) !=
             kGlFramebufferComplete) {
             g_gl_bind_framebuffer(kGlFramebuffer,
                                   static_cast<GLuint>(previousFramebuffer));
+            g_gl_bind_renderbuffer(kGlRenderbuffer,
+                                   static_cast<GLuint>(previousRenderbuffer));
             H47VR_LOG_WARN("openxr: swapchain FBO %u incomplete for eye %d", i,
                            index);
             return false;
@@ -349,7 +470,10 @@ bool CreateEyeSwapchain(XrViewConfigurationView view, EyeSwapchain& eye,
     }
     g_gl_bind_framebuffer(kGlFramebuffer,
                           static_cast<GLuint>(previousFramebuffer));
-    H47VR_LOG_INFO("openxr: eye %d swapchain %ux%u, %u image(s), format 0x%04X",
+    g_gl_bind_renderbuffer(kGlRenderbuffer,
+                           static_cast<GLuint>(previousRenderbuffer));
+    H47VR_LOG_INFO("openxr: eye %d swapchain %ux%u, %u image(s), format "
+                   "0x%04X, depth 24",
                    index, eye.width, eye.height, imageCount,
                    static_cast<unsigned int>(g_swapchain_format));
     return true;
@@ -615,10 +739,10 @@ void SetSubImage(XrSwapchainSubImage* subImage, int eye) {
 }
 
 const XrCompositionLayerBaseHeader* SubmitPresentation(
-    const XrView views[2], StereoMode mode) {
+    const XrView views[2], StereoMode mode, bool directStereo) {
     int sourceWidth = 0;
     int sourceHeight = 0;
-    if (!GlStereoSourceSize(&sourceWidth, &sourceHeight)) {
+    if (!directStereo && !GlStereoSourceSize(&sourceWidth, &sourceHeight)) {
         return nullptr;
     }
 
@@ -634,13 +758,15 @@ const XrCompositionLayerBaseHeader* SubmitPresentation(
 
     if (mode == StereoMode::Stereo) {
         for (int eye = 0; eye < 2; ++eye) {
-            uint32_t imageIndex = 0;
-            if (!AcquireEyeImage(eye, &imageIndex)) {
-                return nullptr;
+            if (!directStereo) {
+                uint32_t imageIndex = 0;
+                if (!AcquireEyeImage(eye, &imageIndex)) {
+                    return nullptr;
+                }
+                const int left = eye == 0 ? 0 : sourceWidth / 2;
+                const int right = eye == 0 ? sourceWidth / 2 : sourceWidth;
+                BlitBackbufferToEye(eye, imageIndex, left, right, sourceHeight);
             }
-            const int left = eye == 0 ? 0 : sourceWidth / 2;
-            const int right = eye == 0 ? sourceWidth / 2 : sourceWidth;
-            BlitBackbufferToEye(eye, imageIndex, left, right, sourceHeight);
 
             projectionViews[eye].type =
                 XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
@@ -678,88 +804,180 @@ const XrCompositionLayerBaseHeader* SubmitPresentation(
     return nullptr;
 }
 
-void LocateViews() {
+bool StartRenderFrame() {
+    if (g_render_frame_open) {
+        return true;
+    }
+
     InvalidatePose();
     ReleaseAcquiredImages();
 
-    XrFrameState frameState{XR_TYPE_FRAME_STATE};
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
-    XrResult result = ::xrWaitFrame(g_session, &waitInfo, &frameState);
+    XrResult result = ::xrWaitFrame(g_session, &waitInfo, &g_render_frame);
     if (XR_FAILED(result)) {
-        H47VR_LOG_WARN("openxr: xrWaitFrame failed (%d)", static_cast<int>(result));
-        return;
+        H47VR_LOG_WARN("openxr: xrWaitFrame failed (%d)",
+                       static_cast<int>(result));
+        return false;
     }
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
     result = ::xrBeginFrame(g_session, &beginInfo);
     if (XR_FAILED(result)) {
-        H47VR_LOG_WARN("openxr: xrBeginFrame failed (%d)", static_cast<int>(result));
-        return;
+        H47VR_LOG_WARN("openxr: xrBeginFrame failed (%d)",
+                       static_cast<int>(result));
+        return false;
     }
+    g_render_frame_open = true;
+    g_direct_stereo = false;
+    g_render_views_valid = false;
 
     XrViewLocateInfo locateInfo{XR_TYPE_VIEW_LOCATE_INFO};
     locateInfo.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-    locateInfo.displayTime = frameState.predictedDisplayTime;
+    locateInfo.displayTime = g_render_frame.predictedDisplayTime;
     locateInfo.space = g_local_space;
     XrViewState viewState{XR_TYPE_VIEW_STATE};
     uint32_t viewCount = 2;
-    XrView views[2] = {
-        XrView{XR_TYPE_VIEW},
-        XrView{XR_TYPE_VIEW},
-    };
+    g_render_views[0] = XrView{XR_TYPE_VIEW};
+    g_render_views[1] = XrView{XR_TYPE_VIEW};
     result = ::xrLocateViews(g_session, &locateInfo, &viewState, 2, &viewCount,
-                             views);
+                             g_render_views);
 
-    if (XR_SUCCEEDED(result) && viewCount >= 2 &&
+    g_render_views_valid =
+        XR_SUCCEEDED(result) && viewCount >= 2 &&
         (viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) != 0 &&
-        (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0) {
-        OpenXrEyePose sample;
-        sample.valid = true;
-        sample.frame = frameState.predictedDisplayTime;
-        sample.fovValid = true;
-        for (int eye = 0; eye < 2; ++eye) {
-            sample.eyeXMetres[eye] = views[eye].pose.position.x;
-            sample.fov[eye][0] = views[eye].fov.angleLeft;
-            sample.fov[eye][1] = views[eye].fov.angleRight;
-            sample.fov[eye][2] = views[eye].fov.angleUp;
-            sample.fov[eye][3] = views[eye].fov.angleDown;
-            sample.fovValid = sample.fovValid && ValidFov(views[eye].fov);
-        }
-
-        const XrQuaternionf& q = views[0].pose.orientation;
-        const float forwardX = -2.0f * (q.x * q.z + q.w * q.y);
-        const float forwardY = -2.0f * (q.y * q.z - q.w * q.x);
-        const float forwardZ = -(1.0f - 2.0f * (q.x * q.x + q.y * q.y));
-        sample.yawDegrees =
-            std::atan2(forwardX, -forwardZ) * 57.29577951308232f;
-        sample.pitchDegrees =
-            std::atan2(forwardY,
-                       std::sqrt(forwardX * forwardX + forwardZ * forwardZ)) *
-            57.29577951308232f;
-
-        std::lock_guard<std::mutex> lock(g_pose_mutex);
-        g_pose = sample;
+        (viewState.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) != 0;
+    if (!g_render_views_valid) {
+        return true;
     }
 
+    OpenXrEyePose sample;
+    sample.valid = true;
+    sample.frame = g_render_frame.predictedDisplayTime;
+    sample.fovValid = true;
+    for (int eye = 0; eye < 2; ++eye) {
+        sample.eyeXMetres[eye] = g_render_views[eye].pose.position.x;
+        sample.fov[eye][0] = g_render_views[eye].fov.angleLeft;
+        sample.fov[eye][1] = g_render_views[eye].fov.angleRight;
+        sample.fov[eye][2] = g_render_views[eye].fov.angleUp;
+        sample.fov[eye][3] = g_render_views[eye].fov.angleDown;
+        sample.fovValid = sample.fovValid && ValidFov(g_render_views[eye].fov);
+    }
+
+    const XrQuaternionf& q = g_render_views[0].pose.orientation;
+    const float forwardX = -2.0f * (q.x * q.z + q.w * q.y);
+    const float forwardY = -2.0f * (q.y * q.z - q.w * q.x);
+    const float forwardZ = -(1.0f - 2.0f * (q.x * q.x + q.y * q.y));
+    sample.yawDegrees = std::atan2(forwardX, -forwardZ) * 57.29577951308232f;
+    sample.pitchDegrees =
+        std::atan2(forwardY,
+                   std::sqrt(forwardX * forwardX + forwardZ * forwardZ)) *
+        57.29577951308232f;
+
+    std::lock_guard<std::mutex> lock(g_pose_mutex);
+    g_pose = sample;
+    return true;
+}
+
+void ClearDirectTargets() {
+    GLint previousFramebuffer = 0;
+    g_gl_get_integer(kGlDrawFramebufferBinding, &previousFramebuffer);
+    g_gl_push_attrib(kGlAllAttribBits);
+    g_gl_disable(kGlScissorTest);
+    g_gl_color_mask(1, 1, 1, 1);
+    g_gl_depth_mask(1);
+    g_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+    for (int eye = 0; eye < 2; ++eye) {
+        const uint32_t imageIndex = g_acquired_images[eye];
+        if (imageIndex == UINT32_MAX) {
+            continue;
+        }
+        g_gl_bind_framebuffer(kGlFramebuffer,
+                              g_eyes[eye].framebuffers[imageIndex]);
+        g_gl_clear(kGlColorBufferBit | kGlDepthBufferBit);
+    }
+    g_gl_bind_framebuffer(kGlFramebuffer,
+                          static_cast<GLuint>(previousFramebuffer));
+    g_gl_pop_attrib();
+}
+
+void MeasureDirectTargets() {
+    if (++g_direct_frame_count != 10 || g_gl_read_pixels == nullptr) {
+        return;
+    }
+    constexpr int kSampleSize = 256;
+    std::vector<float> pixels[2];
+    float mean[2] = {};
+    float peak[2] = {};
+    const GLint x = (std::max)(
+        0, (static_cast<int>(g_eyes[0].width) - kSampleSize) / 2);
+    const GLint y = (std::max)(
+        0, (static_cast<int>(g_eyes[0].height) - kSampleSize) / 2);
+
+    GLint previousFramebuffer = 0;
+    g_gl_get_integer(kGlDrawFramebufferBinding, &previousFramebuffer);
+    for (int eye = 0; eye < 2; ++eye) {
+        pixels[eye].assign(kSampleSize * kSampleSize * 4, 0.0f);
+        const uint32_t imageIndex = g_acquired_images[eye];
+        if (imageIndex == UINT32_MAX) {
+            continue;
+        }
+        g_gl_bind_framebuffer(kGlFramebuffer,
+                              g_eyes[eye].framebuffers[imageIndex]);
+        g_gl_read_pixels(x, y, kSampleSize, kSampleSize, GL_RGBA, GL_FLOAT,
+                         pixels[eye].data());
+        for (int i = 0; i < kSampleSize * kSampleSize; ++i) {
+            const float value =
+                (pixels[eye][i * 4] + pixels[eye][i * 4 + 1] +
+                 pixels[eye][i * 4 + 2]) /
+                3.0f;
+            mean[eye] += value;
+            peak[eye] = (std::max)(peak[eye], value);
+        }
+        mean[eye] /= static_cast<float>(kSampleSize * kSampleSize);
+    }
+    g_gl_bind_framebuffer(kGlFramebuffer,
+                          static_cast<GLuint>(previousFramebuffer));
+
+    float difference = 0.0f;
+    for (int i = 0; i < kSampleSize * kSampleSize; ++i) {
+        difference +=
+            (std::fabs(pixels[0][i * 4] - pixels[1][i * 4]) +
+             std::fabs(pixels[0][i * 4 + 1] - pixels[1][i * 4 + 1]) +
+             std::fabs(pixels[0][i * 4 + 2] - pixels[1][i * 4 + 2])) /
+            3.0f;
+    }
+    difference /= static_cast<float>(kSampleSize * kSampleSize);
+    H47VR_LOG_INFO("openxr: direct image check mean L/R %.4f/%.4f, peak "
+                   "L/R %.4f/%.4f, left/right difference %.4f",
+                   mean[0], mean[1], peak[0], peak[1], difference);
+}
+
+void FinishRenderFrame(StereoMode mode) {
     XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
-    endInfo.displayTime = frameState.predictedDisplayTime;
+    endInfo.displayTime = g_render_frame.predictedDisplayTime;
     endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     endInfo.layerCount = 0;
     endInfo.layers = nullptr;
-    const StereoMode mode = StereoRendererMode();
-    if (g_presentation_ready && mode != StereoMode::Off) {
+    if (g_presentation_ready && g_render_views_valid &&
+        mode != StereoMode::Off) {
+        const bool direct = g_direct_stereo && mode == StereoMode::Stereo;
         const XrCompositionLayerBaseHeader* layer =
-            SubmitPresentation(views, mode);
+            SubmitPresentation(g_render_views, mode, direct);
+        if (direct) {
+            MeasureDirectTargets();
+        }
         if (layer != nullptr) {
             endInfo.layerCount = 1;
             endInfo.layers = &layer;
-            const int submittedMode = static_cast<int>(mode);
+            const int submittedMode =
+                direct ? 3 : static_cast<int>(mode);
             if (submittedMode != g_last_submitted_mode) {
                 g_last_submitted_mode = submittedMode;
                 H47VR_LOG_INFO("openxr: submitting %s layer",
-                               mode == StereoMode::Stereo
-                                   ? "stereo projection"
-                                   : "theater quad");
+                               direct ? "direct per-eye stereo projection"
+                                      : (mode == StereoMode::Stereo
+                                             ? "copied stereo projection"
+                                             : "theater quad"));
             }
         }
     } else {
@@ -767,9 +985,77 @@ void LocateViews() {
     }
     ReleaseAcquiredImages();
     ::xrEndFrame(g_session, &endInfo);
+    g_render_frame_open = false;
+    g_direct_stereo = false;
+    g_render_views_valid = false;
 }
 
 }  // namespace
+
+bool OpenXrBeginStereoTarget(OpenXrStereoTarget* target) {
+    if (target == nullptr || !g_presentation_ready ||
+        !g_session_running.load()) {
+        return false;
+    }
+    if (g_direct_stereo) {
+        for (int eye = 0; eye < 2; ++eye) {
+            const uint32_t imageIndex = g_acquired_images[eye];
+            if (imageIndex == UINT32_MAX) {
+                return false;
+            }
+            target->framebuffer[eye] = g_eyes[eye].framebuffers[imageIndex];
+        }
+        target->width = static_cast<int>(g_eyes[0].width);
+        target->height = static_cast<int>(g_eyes[0].height);
+        return true;
+    }
+
+    PollEvents();
+    if (!g_session_running.load() || !StartRenderFrame() ||
+        !g_render_views_valid) {
+        return false;
+    }
+
+    if (!g_direct_stereo) {
+        ReleaseAcquiredImages();
+        for (int eye = 0; eye < 2; ++eye) {
+            uint32_t imageIndex = 0;
+            if (!AcquireEyeImage(eye, &imageIndex)) {
+                ReleaseAcquiredImages();
+                return false;
+            }
+        }
+        g_direct_stereo = true;
+        ClearDirectTargets();
+        static bool reported = false;
+        if (!reported) {
+            reported = true;
+            H47VR_LOG_INFO("openxr: direct per-eye stereo render targets "
+                           "ready at %ux%u",
+                           g_eyes[0].width, g_eyes[0].height);
+        }
+    }
+
+    for (int eye = 0; eye < 2; ++eye) {
+        const uint32_t imageIndex = g_acquired_images[eye];
+        if (imageIndex == UINT32_MAX) {
+            return false;
+        }
+        target->framebuffer[eye] = g_eyes[eye].framebuffers[imageIndex];
+    }
+    target->width = static_cast<int>(g_eyes[0].width);
+    target->height = static_cast<int>(g_eyes[0].height);
+    return true;
+}
+
+void OpenXrCancelStereoTarget() {
+    ReleaseAcquiredImages();
+    g_direct_stereo = false;
+}
+
+bool OpenXrDirectStereoActive() {
+    return g_direct_stereo;
+}
 
 bool OpenXrPoseStart() {
     g_gate_path = JoinPath(mod::GameDirectory(), L"h47vr-openxr.txt");
@@ -819,10 +1105,14 @@ void OpenXrPoseFrame(HDC device, unsigned long frame) {
         LookDriverSetHeadPose(false, 0.0, 0.0);
         return;
     }
-    LocateViews();
+    if (!g_render_frame_open && !StartRenderFrame()) {
+        LookDriverSetHeadPose(false, 0.0, 0.0);
+        return;
+    }
     OpenXrEyePose pose;
     const bool tracked = OpenXrPoseGet(&pose);
     LookDriverSetHeadPose(tracked, pose.yawDegrees, pose.pitchDegrees);
+    FinishRenderFrame(StereoRendererMode());
     if (frame % 300 == 0) {
         if (tracked) {
             H47VR_LOG_INFO("openxr: eye X %.4f / %.4f m, head yaw %.2f pitch %.2f, "

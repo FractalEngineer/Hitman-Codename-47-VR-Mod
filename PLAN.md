@@ -290,12 +290,19 @@ the "camera hook" the gate asked for is not needed for it.
       remains
 - [x] **Submit real OpenXR frame layers, 2026-10-19.** The gated backend creates two accepted
       OpenGL swapchains at the runtime's recommended size (1512x1680 under SteamVR's null HMD),
-      attaches every image to an FBO, blits the completed game frame into the acquired images and
-      releases them at the correct point before `xrEndFrame`. Theater mode submits one quad layer;
-      gameplay submits a two-view projection layer. Verified live under SteamVR's null HMD:
-      the game's OpenGL context, both swapchains and FBOs, theater quad, stereo projection, valid
-      poses/separation and 60 FPS. This is a presentation bridge from the desktop SBS frame, not
-      the final direct per-eye render path, so scaling quality still needs work
+      attaches every image to a depth-complete FBO, and releases them at the correct point before
+      `xrEndFrame`. Theater mode submits one quad layer; gameplay submits a two-view projection
+      layer. Verified live under SteamVR's null HMD: the game's OpenGL context, both swapchains,
+      theater quad, gameplay projection, valid poses/separation and 60 FPS
+- [x] **Render gameplay directly into the OpenXR eye images, 2026-10-20.** Stereo begins the XR
+      frame before the first perspective draw, acquires both swapchain images, binds the matching
+      1512x1680 FBO with a 24-bit depth attachment, and renders the existing single-update face-list
+      replay directly into each eye. `SwapBuffers` submits that prepared projection layer without
+      copying the 800x600 desktop SBS frame. The desktop SBS path remains the fallback when XR
+      presentation is unavailable. Verified under SteamVR's null HMD: 79,588 completed stereo
+      pairs, approximately 60 FPS, and a 256x256 centre readback with mean luminance 0.1713/0.1629
+      and a 0.0446 left/right difference, proving non-black, non-identical eye images. A physical
+      headset pass and visual inspection remain
 - [x] **Apply camera changes before visibility calculation - solved, 2026-10-19, by not
       calculating them here at all.** Because the camera is driven through the engine's own
       input, the engine does the visibility pass itself with the camera it is actually using, so
@@ -345,8 +352,10 @@ Theater gating was verified across the real transition: the introduction remaine
 changed to `mode=stereo gameplay=1` and the frame count continued at 60 FPS.
 The OpenXR layer bridge was verified under SteamVR's null HMD: two 1512x1680 OpenGL swapchains,
 the theater quad and the gameplay projection layer all submitted without swapchain errors while
-the game remained at 60 FPS. The current headset image is scaled from the desktop side-by-side
-diagnostic frame, so direct eye-target rendering is still needed for final sharpness and aspect.
+the game remained at 60 FPS. The direct follow-up renders the face-list replay into the acquired
+eye images themselves. A centre readback measured mean luminance 0.1713/0.1629 and a 0.0446
+left/right difference, and the desktop SBS blit remains available as a fallback. A physical
+headset is still required to judge lens correction, convergence, comfort and final sharpness.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

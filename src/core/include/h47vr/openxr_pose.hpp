@@ -14,6 +14,12 @@ struct OpenXrEyePose {
     unsigned long long frame = 0;
 };
 
+struct OpenXrStereoTarget {
+    unsigned int framebuffer[2] = {};
+    int width = 0;
+    int height = 0;
+};
+
 bool OpenXrPoseStart();
 
 // Gated by <game>\h47vr-openxr.txt. Initialisation happens on the render thread
@@ -23,5 +29,16 @@ void OpenXrPoseFrame(HDC device, unsigned long frame);
 // Latest predicted eye poses. The fixed-IPD path remains active until this
 // returns true.
 bool OpenXrPoseGet(OpenXrEyePose* pose);
+
+// Starts one OpenXR frame before the first stereo draw and returns the acquired
+// per-eye render targets. Called on the render thread. The frame is submitted
+// from OpenXrPoseFrame at the presentation boundary.
+bool OpenXrBeginStereoTarget(OpenXrStereoTarget* target);
+
+// Drops acquired direct-render images while preserving the open XR frame so the
+// desktop side-by-side fallback can still be copied and submitted.
+void OpenXrCancelStereoTarget();
+
+bool OpenXrDirectStereoActive();
 
 }  // namespace h47vr

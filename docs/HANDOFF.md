@@ -12,8 +12,9 @@ as the work**.
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
 Repo state: local `main` contains `8125855` plus the asymmetric-projection,
-head-tracking, first-person, theater-selection and OpenXR-presentation
-follow-ups described below, while `origin/main` remains seven commits behind.
+head-tracking, first-person, theater-selection, OpenXR-presentation and native
+per-eye rendering follow-ups described below. `origin/main` has not been updated
+with these local commits.
 The game may or may not be running; it keeps rendering while the desktop is used,
 so a session is free to launch it and walk away.
 
@@ -89,16 +90,28 @@ when fresh MouseConCam updates resume it switches to two eye passes.
 and both pass counters. The live transition was verified: the intro reported
 `mode=theater gameplay=0`, and the training level switched to
 `mode=stereo gameplay=1` only after MouseConCam began updating, at 60 FPS. The
-headset still needs an actual flat virtual-screen layer for theater mode.
+headset path submits that single image as a flat virtual-screen layer.
 
 **Real OpenXR frame layers now submit, 2026-10-19.** Under SteamVR's null HMD,
 the backend created two 1512x1680 OpenGL swapchains, attached every image to an
 FBO, acquired/waited/released images in the required order, and submitted both
 layer types. Theater mode uses one quad at 2 m; gameplay uses the runtime's two
-poses and FOVs in a projection layer. The desktop SBS frame is currently blitted
-into the eye textures, which proves the presentation bridge but does not yet
-give native per-eye sharpness or aspect. The game remained at 60 FPS, published
-eye X as approximately +/-0.0315 m, and toggled off cleanly.
+poses and FOVs in a projection layer. The desktop SBS frame is blitted only when
+native eye rendering is unavailable. The game remained at 60 FPS, published eye
+X as approximately +/-0.0315 m, and toggled off cleanly.
+
+**Gameplay now renders directly into the OpenXR eye images, 2026-10-20.**
+`stereo_renderer.cpp` begins the XR frame before the first perspective draw.
+`openxr_pose.cpp` locates the runtime views, acquires both swapchain images, and
+builds depth-complete FBOs; `gl_probe.cpp` binds the matching target and
+installs the per-eye asymmetric projection for each half of the existing
+face-list replay. `SwapBuffers` submits the prepared projection layer directly,
+without copying the desktop SBS frame. If native acquisition or binding is
+unavailable, that frame falls back to the SBS blit. Under SteamVR's null HMD the
+training level completed 79,588 stereo pairs at approximately 60 FPS; a 256x256
+centre readback showed mean luminance 0.1713/0.1629 and a 0.0446 left/right
+difference, proving non-black, non-identical eye images. A physical headset is
+still needed for lens, convergence, comfort and final sharpness.
 
 The game's own level start is
 
@@ -455,11 +468,13 @@ Two things the injected rotation cannot do, both worth remembering:
   instance with `XR_KHR_opengl_enable`, reaches the runtime system query and
   degrades cleanly when no HMD is attached. This proves the in-game client side
   of the bridge; presentation was subsequently proven under SteamVR's null HMD.
-- **OpenXR presentation under the null HMD.** Two accepted GL swapchains,
-  per-image FBOs, theater quad and gameplay projection layer submitted with
-  correct acquire/wait/release ordering and no runtime errors at 60 FPS.
-  Current images are scaled from the desktop SBS frame; direct eye-target
-  rendering remains.
+- **OpenXR presentation and native eye rendering under the null HMD.** Two
+  accepted 1512x1680 GL swapchains, depth-complete per-image FBOs, theater quad
+  and gameplay projection layer submit with correct acquire/wait/release
+  ordering and no runtime errors at 60 FPS. Gameplay face-list draws render
+  directly into each acquired image. Pixel readback measured 0.1713/0.1629 mean
+  luminance and a 0.0446 left/right difference. The desktop SBS blit remains the
+  fallback when native XR targets are unavailable.
 
 ## Reverse-engineering map
 
@@ -762,19 +777,19 @@ are working; the remaining work is to make the stereo match the headset.
    check that tangent orientation and yaw/pitch direction are correct, and watch
    frame pacing while the per-frame head corrections are active. The
    half-viewport scale remains only as the no-runtime desktop fallback.
-2. **Calibrate game units and eye height.** The 10-unit IPD default is a first
-   test value inferred from the 150-unit follow-camera distance. Measure the
-   training level's geometry and near clip, then express IPD and head translation
-   in metres.
-3. **Move from SBS presentation to native per-eye rendering.** The null-HMD
-   path now submits both theater and gameplay layers from the completed desktop
-   frame. Render the scene, HUD and UI directly into each accepted eye image
-   (or a shared high-resolution per-eye target) so sharpness and aspect no
-   longer depend on the 800x600 diagnostic backbuffer.
-4. **Finish theater mode in the headset.** The desktop path now selects one
-   theater pass outside gameplay and two eye passes during fresh MouseConCam
-   updates. Submit that single pass as a flat virtual-screen layer in OpenXR,
-   and use immersive layers only when the state file says `mode=stereo`.
+2. **Calibrate game units and eye height.** The current profile uses the user's
+   67 mm IPD and a working 100-units-per-metre scale inferred from the 150-unit
+   follow-camera distance. Measure the training level's geometry and near clip,
+   then validate IPD and head translation against physical landmarks.
+3. **Validate native per-eye rendering on the physical headset.** The null-HMD
+   path now renders gameplay face lists directly into depth-complete eye images
+   without the desktop SBS copy. Confirm lens-correct convergence, FOV
+   orientation, expected sharpness and stable frame pacing on the Quest. Check
+   whether orthographic gameplay HUD/UI passes need an explicit per-eye overlay
+   path; the current native path primarily captures the perspective face lists.
+4. **Finish theater mode on the physical headset.** The desktop path selects one
+   theater pass outside gameplay, and OpenXR submits that image as a flat quad.
+   Verify its placement, size and text readability through Virtual Desktop.
 5. **Finish first person and tune visibility.** The gameplay camera can now sit
    at a 3-unit MouseConCam distance. Hide the player's head while keeping the
    body for shadows and reflections, calibrate eye height and near clipping, and

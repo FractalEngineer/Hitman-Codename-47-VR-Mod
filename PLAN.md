@@ -220,8 +220,14 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [~] Deliver a hook map and a graphics-bridge result (hook map now carries resolved symbols and
       RVAs; graphics bridge still untested)
 
-Gate: the VR graphics path is now proven. The controllable camera still is not,
-so interaction work stays blocked until a camera hook exists.
+Gate: **met, 2026-10-19, by a route the plan did not anticipate.** The VR
+graphics path is proven (OpenXR session READY headless through SteamVR's null
+driver, in the same 32-bit process as the legacy WGL context). The controllable
+camera now exists too - not as a hook, but by driving the engine's own input:
+with focus taken, synthetic mouse deltas reach the engine, the engine rotates its
+own camera, and its visibility pass follows, so the world stays whole (verified
+with captures, `tools/turn.ps1`). Interaction work is therefore unblocked, and
+the "camera hook" the gate asked for is not needed for it.
 
 ### Milestone 2 - correct stereo rendering
 
@@ -232,7 +238,11 @@ so interaction work stays blocked until a camera hook exists.
 - [~] Use the runtime's eye poses and asymmetric projections (runtime side proven by the
       probe; the renderer side is blocked: `glFrustum` is called from a code region Ghidra
       has not defined as a function, and recovering it is the next step)
-- [ ] Apply camera changes before visibility calculation; expand visibility conservatively
+- [x] **Apply camera changes before visibility calculation - solved, 2026-10-19, by not
+      calculating them here at all.** Because the camera is driven through the engine's own
+      input, the engine does the visibility pass itself with the camera it is actually using, so
+      there is nothing to expand conservatively and no culled geometry to recover. The
+      GL-boundary rotation (which does need this) is superseded and kept only as a fallback
 - [ ] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon events
 - [ ] Calibrate game units to metres, eye height and near clipping
 - [ ] Hide the player's head and separate gameplay camera control from headset orientation

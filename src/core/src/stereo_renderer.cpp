@@ -179,6 +179,13 @@ void StereoRendererFrame(unsigned long frame) {
     }
 }
 
+StereoMode StereoRendererMode() {
+    if (!g_active.load()) {
+        return StereoMode::Off;
+    }
+    return g_gameplay_active ? StereoMode::Stereo : StereoMode::Theater;
+}
+
 void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     ++g_world_draws;
     RefreshStereo();

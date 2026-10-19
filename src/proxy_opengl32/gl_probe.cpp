@@ -710,6 +710,15 @@ bool StereoPerspectiveImpl() {
     return g_perspective.load();
 }
 
+void StereoSourceSizeImpl(int* width, int* height) {
+    if (width != nullptr) {
+        *width = g_viewport[2];
+    }
+    if (height != nullptr) {
+        *height = g_viewport[3];
+    }
+}
+
 bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians) {
     if (!g_perspective.load()) {
         return false;
@@ -989,6 +998,7 @@ void GlProbePublish() {
     g_gl_probe_report = &ReportImpl;
     g_gl_stereo_available = &StereoAvailableImpl;
     g_gl_stereo_perspective = &StereoPerspectiveImpl;
+    g_gl_stereo_source_size = &StereoSourceSizeImpl;
     g_gl_stereo_begin_eye = &StereoBeginEyeImpl;
     g_gl_stereo_end_eye = &StereoEndEyeImpl;
 }

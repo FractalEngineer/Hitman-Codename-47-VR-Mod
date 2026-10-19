@@ -286,8 +286,16 @@ the "camera hook" the gate asked for is not needed for it.
       engine's own mouse path through `look_driver.cpp`, with first-pose recentering, a small
       deadband and a per-frame pixel cap. With no active HMD it logs the runtime failure, leaves
       head tracking off, and keeps the user's 67 mm IPD at 100 game units/metre (6.7 units). Live
-      HMD validation of eye separation, tangent orientation, head direction and frame pacing,
-      plus real headset swapchains, remains
+      HMD validation of eye separation, tangent orientation, head direction and frame pacing
+      remains
+- [x] **Submit real OpenXR frame layers, 2026-10-19.** The gated backend creates two accepted
+      OpenGL swapchains at the runtime's recommended size (1512x1680 under SteamVR's null HMD),
+      attaches every image to an FBO, blits the completed game frame into the acquired images and
+      releases them at the correct point before `xrEndFrame`. Theater mode submits one quad layer;
+      gameplay submits a two-view projection layer. Verified live under SteamVR's null HMD:
+      the game's OpenGL context, both swapchains and FBOs, theater quad, stereo projection, valid
+      poses/separation and 60 FPS. This is a presentation bridge from the desktop SBS frame, not
+      the final direct per-eye render path, so scaling quality still needs work
 - [x] **Apply camera changes before visibility calculation - solved, 2026-10-19, by not
       calculating them here at all.** Because the camera is driven through the engine's own
       input, the engine does the visibility pass itself with the camera it is actually using, so
@@ -317,7 +325,8 @@ the "camera hook" the gate asked for is not needed for it.
       gameplay draws the two eye passes. `h47vr-stereo-state.txt` publishes `mode=theater|stereo`.
       Verified live: the intro reported `mode=theater gameplay=0`, the training level switched to
       `mode=stereo gameplay=1` only after MouseConCam started updating, and frame cadence stayed
-      60 FPS. A true virtual-screen XR layer remains to be built
+      60 FPS. The headset path now submits that theater image as a quad and gameplay as two
+      projection views under the null HMD; a physical-headset pass remains
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the
@@ -334,6 +343,10 @@ with a clean restoration to the original view when disabled.
 Theater gating was verified across the real transition: the introduction remained
 `mode=theater gameplay=0`; after the level loaded and MouseConCam began updating, the state
 changed to `mode=stereo gameplay=1` and the frame count continued at 60 FPS.
+The OpenXR layer bridge was verified under SteamVR's null HMD: two 1512x1680 OpenGL swapchains,
+the theater quad and the gameplay projection layer all submitted without swapchain errors while
+the game remained at 60 FPS. The current headset image is scaled from the desktop side-by-side
+diagnostic frame, so direct eye-target rendering is still needed for final sharpness and aspect.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

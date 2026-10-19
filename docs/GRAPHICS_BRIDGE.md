@@ -3,8 +3,10 @@
 The plan's first technical gate: can a 32-bit process hold a legacy Windows
 OpenGL context and an OpenXR session at the same time?
 
-**Status: PASSED, headless.** Demonstrated on 2026-10-18 with SteamVR's null
-driver as the runtime.
+**Status: PASSED, headless.** The session gate passed on 2026-10-18. The
+presentation follow-up passed under SteamVR's null HMD on 2026-10-19: two
+1512x1680 OpenGL swapchains, a theater quad and a two-view gameplay projection
+layer all submitted successfully.
 
 **In-game follow-up, 2026-10-19:** the mod now contains a gated OpenXR pose
 backend (`src/core/src/openxr_pose.cpp`). It initializes Virtual Desktop inside
@@ -12,8 +14,8 @@ the running game on the game's current WGL context. With no headset streaming,
 `xrGetSystem` returns `XR_ERROR_FORM_FACTOR_UNAVAILABLE` and the game continues
 on its fixed 67 mm fallback. When views are valid, runtime eye X, asymmetric FOV
 tangents and head orientation feed the stereo renderer and the engine's own
-look-input path. A live headset session and swapchain submission are still the
-remaining presentation gate.
+look-input path. The backend now creates GL swapchains and submits real frame
+layers; a physical-headset validation pass and direct per-eye rendering remain.
 
 ## Gate result
 
@@ -138,8 +140,9 @@ a deliberate test.
 - The in-game backend reaches `xrGetSystem` on the game's WGL context; it still
   needs a connected headset to validate eye positions, asymmetric tangents and
   head tracking.
-- Whether `SwapBuffers` interception is sufficient for presentation control, or
-  whether the engine's scene draw has to be re-entered.
+- The null-HMD run proves swapchain and layer submission, but the image is
+  currently blitted from the desktop side-by-side frame. Direct per-eye render
+  targets are still needed for native sharpness and aspect.
 - Nothing here exercised a real headset. The gate proves API and context
   coexistence, not that frames reach the Quest. That needs a Virtual Desktop
   stream session.
@@ -159,7 +162,8 @@ duplicating those perspective frames per eye.
 The desktop renderer now implements that selection: MouseConCam updates remain
 gameplay-fresh for 250 ms, stale/menu/scripted-camera states draw one theater
 pass, and `h47vr-stereo-state.txt` publishes the current mode. The headset layer
-still has to consume this state.
+now consumes this state: theater submits a quad, gameplay submits a projection
+layer.
 
 ## Engine constraints to respect
 

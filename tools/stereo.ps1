@@ -7,18 +7,26 @@
     Writes <game>\h47vr-stereo.txt while stereo is on. The renderer duplicates
     perspective draw-list passes into left and right half-viewports. Orthographic
     UI and menu passes remain single. Eye separation is in game units; the
-    training-level camera offset suggests centimetres, so 10 is a useful first
-    test value.
+    training-level camera offset suggests 100 game units per metre, so the
+    default physical separation is the user's 67 mm IPD.
+
+.PARAMETER IpdMillimeters
+    Physical eye separation in millimetres. Defaults to 67.
+
+.PARAMETER GameUnitsPerMetre
+    World-space scale. Defaults to 100, based on the 150-unit follow camera.
 
 .PARAMETER Ipd
-    Eye separation in game units. Defaults to 10.
+    Legacy override in raw game units. Use only for calibration experiments.
 
 .PARAMETER Off
     Remove the control file and return to normal rendering.
 #>
 [CmdletBinding()]
 param(
-    [double]$Ipd = 10.0,
+    [double]$IpdMillimeters = 67.0,
+    [double]$GameUnitsPerMetre = 100.0,
+    [double]$Ipd,
     [switch]$Off,
     [string]$GameDir
 )
@@ -53,9 +61,14 @@ if ($Off) {
     exit 0
 }
 
-if ($Ipd -le 0 -or $Ipd -gt 1000) {
-    throw 'Ipd must be between 0 and 1000 game units.'
+if ($IpdMillimeters -le 0 -or $IpdMillimeters -gt 1000) {
+    throw 'IpdMillimeters must be between 0 and 1000.'
 }
 
-Set-Content -LiteralPath $control -Value ("ipd={0}" -f $Ipd) -Encoding ascii
+$request = if ($PSBoundParameters.ContainsKey('Ipd')) {
+    "ipd={0}" -f $Ipd
+} else {
+    "ipd_mm={0} units_per_m={1}" -f $IpdMillimeters, $GameUnitsPerMetre
+}
+Set-Content -LiteralPath $control -Value $request -Encoding ascii
 Write-Host ("stereo on: {0}" -f $control)

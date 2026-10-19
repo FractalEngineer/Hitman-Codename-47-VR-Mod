@@ -27,6 +27,12 @@ foreach(_cfg IN ITEMS DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${_cfg} "${CMAKE_BINARY_DIR}/bin")
 endforeach()
 
+set(H47VR_OPENXR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/openxr")
+set(H47VR_OPENXR_LIB "${H47VR_OPENXR_ROOT}/lib/x86/openxr_loader.lib")
+if(NOT EXISTS "${H47VR_OPENXR_LIB}")
+    message(FATAL_ERROR "h47vr: ${H47VR_OPENXR_LIB} is missing")
+endif()
+
 # ---------------------------------------------------------------------------
 # Build pin header, generated from pins/ so the PowerShell tooling and the
 # compiled mod can never disagree about the supported build.

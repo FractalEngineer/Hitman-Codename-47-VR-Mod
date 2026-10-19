@@ -6,6 +6,13 @@ OpenGL context and an OpenXR session at the same time?
 **Status: PASSED, headless.** Demonstrated on 2026-10-18 with SteamVR's null
 driver as the runtime.
 
+**In-game follow-up, 2026-10-19:** the mod now contains a gated OpenXR pose
+backend (`src/core/src/openxr_pose.cpp`). It initializes Virtual Desktop inside
+the running game on the game's current WGL context. With no headset streaming,
+`xrGetSystem` returns `XR_ERROR_FORM_FACTOR_UNAVAILABLE` and the game continues
+on its fixed 67 mm fallback. A live headset session and swapchain submission are
+still the remaining presentation gate.
+
 ## Gate result
 
 `src/probe/main.cpp` builds to `h47vr-openxr-probe.exe`, and it walks the bridge
@@ -126,9 +133,8 @@ a deliberate test.
 
 ## What is not proven yet
 
-- Whether eye rendering can reuse the game's GL context or needs its own. The
-  runtime requires GL 4.3+, and the game's context comes from the same ICD, so
-  this looks fine, but it is untested inside the game process.
+- The in-game backend reaches `xrGetSystem` on the game's WGL context; it still
+  needs a connected headset to create and validate the session.
 - Whether `SwapBuffers` interception is sufficient for presentation control, or
   whether the engine's scene draw has to be re-entered.
 - Nothing here exercised a real headset. The gate proves API and context

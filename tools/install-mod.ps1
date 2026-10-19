@@ -54,7 +54,7 @@ if (-not $GameDir) { throw 'Could not locate the game. Pass -GameDir explicitly.
 $GameDir = (Resolve-Path -LiteralPath $GameDir).Path
 
 $binDir = Join-Path $BuildDir 'bin'
-foreach ($artifact in @('opengl32.dll', 'h47vr_mod.dll')) {
+foreach ($artifact in @('opengl32.dll', 'h47vr_mod.dll', 'openxr_loader.dll')) {
     if (-not (Test-Path -LiteralPath (Join-Path $binDir $artifact))) {
         throw "Missing $artifact in $binDir. Run tools/build.ps1 first."
     }
@@ -74,7 +74,7 @@ if ($existing) { throw 'The game is running. Close it before installing.' }
 Write-Host "Installing into $GameDir"
 
 $added = [System.Collections.Generic.List[string]]::new()
-foreach ($artifact in @('opengl32.dll', 'h47vr_mod.dll')) {
+foreach ($artifact in @('opengl32.dll', 'h47vr_mod.dll', 'openxr_loader.dll')) {
     Copy-Item -LiteralPath (Join-Path $binDir $artifact) -Destination (Join-Path $GameDir $artifact) -Force
     $added.Add($artifact)
     Write-Host "  added $artifact"

@@ -36,7 +36,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Dest 'Hitman.Exe'))) {
     throw "No development copy at $Dest. Run tools/make-dev-copy.ps1 first."
 }
 
-$artifacts = @('opengl32.dll', 'h47vr_mod.dll', 'h47vr-launcher.exe')
+$artifacts = @('opengl32.dll', 'h47vr_mod.dll', 'openxr_loader.dll', 'h47vr-launcher.exe')
 foreach ($name in $artifacts) {
     $source = Join-Path $binDir $name
     if (-not (Test-Path -LiteralPath $source)) { throw "Missing artifact: $source" }

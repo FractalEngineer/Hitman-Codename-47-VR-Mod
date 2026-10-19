@@ -44,7 +44,18 @@ the left half-viewport with eye-space X shifted by `+IPD/2`, then in the right
 half with `-IPD/2`. Projection X is scaled by 0.5 so vertical FOV and half-screen
 aspect stay correct. The training capture shows clear parallax between the two
 eyes, keeps the HUD and subtitles in each eye, and still reports 60 FPS. This is
-a fixed-IPD monitor prototype; OpenXR eye poses and asymmetric frusta are next.
+a fixed-IPD monitor prototype using the user's 67 mm IPD at 100 game
+units/metre; OpenXR eye poses and asymmetric frusta are next.
+
+**The OpenXR pose backend is integrated behind a gate, 2026-10-19.** Creating
+`h47vr-openxr.txt` makes the render thread initialize OpenXR on the game's
+current WGL context, create a LOCAL reference space and locate predicted stereo
+views. Runtime eye X positions replace the fixed IPD when valid. On this run,
+Virtual Desktop initialised cleanly but `xrGetSystem` returned
+`XR_ERROR_FORM_FACTOR_UNAVAILABLE` because no headset was streaming; the game
+kept running on the 6.7-unit fixed fallback. The pose-only mode intentionally
+submits no swapchain or projection layer yet, so it is not a VR presentation
+path.
 
 The game's own level start is
 
@@ -242,8 +253,10 @@ The fullscreen path at the same handler reads its own remembered cursor position
 ./tools/look.ps1 -Dx 220 -Verify        # relative, in pixels
 ./tools/look.ps1 -Yaw 90 -Verify        # absolute, in degrees from the start
 ./tools/look.ps1 -Yaw 0                 # recentre exactly
-./tools/stereo.ps1 -Ipd 10              # side-by-side stereo prototype
+./tools/stereo.ps1 -IpdMillimeters 67   # side-by-side stereo prototype
 ./tools/stereo.ps1 -Off                 # back to the normal view
+./tools/openxr.ps1 -Enable              # initialize the pose-only OpenXR backend
+./tools/openxr.ps1 -Off                 # leave headset initialization off
 
 # calibration experiments (see Dead ends before using them in anger)
 python tools/calibrate-look.py before.png after.png --px 100 --region 260,150,640,330
@@ -269,7 +282,8 @@ Control files next to the game (all optional, delete to disable):
 | --- | --- |
 | `h47vr-look.txt` | `dx=<px> dy=<px> [steps=<n>] [rate=<frames>]` - turn the engine's **own** camera by posting `WM_MOUSEMOVE`; no focus needed. Consumed on sight, so one write is one turn (`tools/look.ps1`) |
 | `h47vr-camread.txt` | live MouseConCam pose: `yaw`, engine `pitch` (elevation, positive up), the player-relative offset, camera pointer, epoch and update count |
-| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd=<game units>` sets eye separation (`tools/stereo.ps1`) |
+| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale>` sets physical eye separation (`tools/stereo.ps1`) |
+| `h47vr-openxr.txt` | while present, initialize OpenXR on the game's WGL context and use predicted eye X positions when available (`tools/openxr.ps1`) |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
@@ -369,10 +383,17 @@ Two things the injected rotation cannot do, both worth remembering:
 - **Side-by-side stereo loop.** The renderer's face-list consumer (`0x3680`) is
   called twice only while the perspective projection is current. Each eye gets
   its own half-viewport, a 0.5 X projection scale and an eye-space X offset from
-  `h47vr-stereo.txt`; the original viewport and matrix mode are restored after
-  each pass. The first capture showed 21.46 mean channel difference from the
-  normal view and 7.41 between left and right, with 60 FPS retained. Simulation
-  is not duplicated because this function consumes already-built draw lists.
+  `h47vr-stereo.txt`; the current profile uses 67 mm and 100 game units/metre
+  (6.7 units). The original viewport and matrix mode are restored after each
+  pass. The first capture showed 21.46 mean channel difference from the normal
+  view and 7.41 between left and right at the initial 10-unit test separation,
+  with 60 FPS retained. Simulation is not duplicated because this function
+  consumes already-built draw lists.
+- **OpenXR pose initialization from the game.** The gated backend initializes
+  the 32-bit Virtual Desktop runtime inside the game process, creates an
+  instance with `XR_KHR_opengl_enable`, reaches the runtime system query and
+  degrades cleanly when no HMD is attached. This proves the in-game client side
+  of the bridge; swapchain submission and an actual headset remain untested.
 
 ## Reverse-engineering map
 
@@ -668,11 +689,12 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 Milestone 2 continues here. The eye loop and a fixed-IPD side-by-side prototype
 are working; the remaining work is to make the stereo match the headset.
 
-1. **Replace the fixed IPD with runtime eye poses.** Feed the predicated left and
-   right `xrLocateViews` positions into the eye-space offset and build the
-   asymmetric per-eye projection from the runtime tangents. The current
-   half-viewport projection scale is the monitor prototype, not the headset
-   projection path.
+1. **Validate and finish runtime eye poses.** The gated backend already feeds
+   predicted `xrLocateViews` eye X positions into the eye-space offset. With a
+   live Virtual Desktop session, confirm the reported separation is about
+   67 mm, then build the asymmetric per-eye projection from the runtime FOV
+   tangents. The current half-viewport projection scale is the monitor
+   prototype, not the headset projection path.
 2. **Calibrate game units and eye height.** The 10-unit IPD default is a first
    test value inferred from the 150-unit follow-camera distance. Measure the
    training level's geometry and near clip, then express IPD and head translation

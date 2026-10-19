@@ -81,7 +81,7 @@ $goFile = Join-Path $GameDir 'h47vr-go.txt'
 # runs the previous build and the new hooks are simply not in the process.
 $binDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'build/bin'
 if (Test-Path -LiteralPath (Join-Path $binDir 'opengl32.dll')) {
-    foreach ($name in @('opengl32.dll', 'h47vr_mod.dll')) {
+    foreach ($name in @('opengl32.dll', 'h47vr_mod.dll', 'openxr_loader.dll')) {
         Copy-Item -LiteralPath (Join-Path $binDir $name) `
                   -Destination (Join-Path $GameDir $name) -Force
     }

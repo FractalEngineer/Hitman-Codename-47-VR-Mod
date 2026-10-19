@@ -244,8 +244,9 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [~] Validate the same through Virtual Desktop on the Quest (VDXR creates instances fine and
       advertises `XR_KHR_opengl_enable`; `xrGetSystem` needs an active stream session, so this
       awaits a connected headset)
-- [~] Deliver a hook map and a graphics-bridge result (hook map now carries resolved symbols and
-      RVAs; graphics bridge still untested)
+- [x] Deliver a hook map and a graphics-bridge result. The hook map carries resolved symbols and
+      RVAs; the standalone gate passed headless, and the game process now initializes the same
+      32-bit OpenXR runtime behind `h47vr-openxr.txt` and degrades cleanly when no HMD is connected
 
 Gate: **met, 2026-10-19, by a route the plan did not anticipate.** The VR
 graphics path is proven (OpenXR session READY headless through SteamVR's null
@@ -277,11 +278,13 @@ the "camera hook" the gate asked for is not needed for it.
       simulation, audio or script entry point is entered twice. The earlier `0x0048F0` function
       was identified correctly as presentation: it calls `glFinish` and `SwapBuffers` but does
       not draw the scene
-- [~] Use the runtime's eye poses and asymmetric projections. The current prototype uses a
-      configurable fixed IPD and symmetric half-viewports: projection X is scaled by 0.5 so the
-      original vertical FOV is preserved and each half has the correct 2:3 aspect. Perspective
-      vertices receive `+/- IPD/2` in eye-space X. Runtime poses, per-eye asymmetry and a real
-      headset viewport are still required
+- [~] Use the runtime's eye poses and asymmetric projections. `openxr_pose.cpp` now creates a
+      gated OpenXR session on the game's current WGL context, locates predicted stereo views and
+      exposes their eye X positions to the renderer. With no active HMD it logs the runtime failure
+      and leaves the fixed-IPD path running. The current fallback uses the user's 67 mm IPD at a
+      working 100-units-per-metre scale (6.7 game units), with projection X scaled by 0.5 for
+      symmetric half-viewports. Applying the runtime FOV tangents, head orientation and real
+      headset swapchains remains
 - [x] **Apply camera changes before visibility calculation - solved, 2026-10-19, by not
       calculating them here at all.** Because the camera is driven through the engine's own
       input, the engine does the visibility pass itself with the camera it is actually using, so
@@ -290,13 +293,18 @@ the "camera hook" the gate asked for is not needed for it.
 - [x] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon
       events: only the face-list draw consumer is replayed. The training capture remained at
       60 FPS and the gameplay frame count advanced at the normal cadence
-- [ ] Calibrate game units to metres, eye height and near clipping
+- [~] Calibrate game units to metres, eye height and near clipping. A 100-units-per-metre working
+      scale is supported by the 150-unit follow-camera distance, 5-unit near plane and 16000-unit
+      far plane. The user's physical IPD is 67 mm. Eye height and a stronger geometric calibration
+      remain to be measured
 - [ ] Hide the player's head and separate gameplay camera control from headset orientation
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
-absolute channel value against the normal view. The left and right halves differ by 7.41 mean
-channel value, which is the positional parallax from the 10-unit IPD. The captured view retained
-the HUD and subtitles in each eye and continued to report 60 FPS.
+absolute channel value against the normal view. The left and right halves differed by 7.41 at the
+initial 10-unit test separation. The calibrated profile is 67 mm IPD at 100 game units/metre
+(6.7 units), which measured a 5.84 left/right difference; the captured view retained the HUD and
+subtitles in each eye and continued to report 60 FPS. The OpenXR pose backend was then verified to
+load Virtual Desktop, fail cleanly at `xrGetSystem` with no connected HMD, and leave the game running.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

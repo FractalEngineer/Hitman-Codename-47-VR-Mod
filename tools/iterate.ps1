@@ -107,7 +107,7 @@ $manifestPath = Join-Path $GameDir 'h47vr-install.json'
 if (Test-Path -LiteralPath $manifestPath) {
     # Already installed: refresh just the binaries so a full uninstall/install
     # round trip is not needed on every iteration.
-    foreach ($name in @('opengl32.dll', 'h47vr_mod.dll')) {
+    foreach ($name in @('opengl32.dll', 'h47vr_mod.dll', 'openxr_loader.dll')) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "build/bin/$name") `
                   -Destination (Join-Path $GameDir $name) -Force
         Write-Host "  refreshed $name"

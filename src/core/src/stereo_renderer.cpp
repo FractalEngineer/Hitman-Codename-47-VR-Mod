@@ -3,6 +3,7 @@
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
+#include "h47vr/openxr_pose.hpp"
 #include "h47vr/paths.hpp"
 
 #include <windows.h>
@@ -15,13 +16,37 @@
 namespace h47vr {
 namespace {
 
+constexpr float kDefaultIpdMillimetres = 67.0f;
+constexpr float kDefaultGameUnitsPerMetre = 100.0f;
+
 std::wstring g_control_path;
 std::atomic<bool> g_active{false};
-std::atomic<float> g_eye_separation{10.0f};
+std::atomic<float> g_eye_separation{kDefaultIpdMillimetres /
+                                   (1000.0f / kDefaultGameUnitsPerMetre)};
 std::atomic<unsigned long> g_world_draws{0};
 std::atomic<unsigned long> g_stereo_passes{0};
+std::atomic<bool> g_runtime_pose_seen{false};
 unsigned int g_refresh_ticks = 0;
-float g_loaded_separation = 10.0f;
+float g_loaded_separation = kDefaultIpdMillimetres /
+                            (1000.0f / kDefaultGameUnitsPerMetre);
+float g_loaded_ipd_mm = kDefaultIpdMillimetres;
+float g_loaded_units_per_metre = kDefaultGameUnitsPerMetre;
+
+bool ReadNumber(const std::string& line, const char* key, float* value) {
+    const std::string marker = std::string(key) + "=";
+    const std::size_t at = line.find(marker);
+    if (at == std::string::npos) {
+        return false;
+    }
+    const char* text = line.c_str() + at + marker.size();
+    char* end = nullptr;
+    const float parsed = std::strtof(text, &end);
+    if (end == text || parsed != parsed) {
+        return false;
+    }
+    *value = parsed;
+    return true;
+}
 
 std::string ReadFirstLine(const std::wstring& path) {
     std::ifstream file(path);
@@ -59,23 +84,33 @@ void RefreshStereo() {
     }
 
     const std::string line = ReadFirstLine(g_control_path);
-    float separation = g_loaded_separation;
-    const char* ipd = line.c_str();
-    const char* prefix = "ipd=";
-    if (line.compare(0, 4, prefix) == 0) {
-        ipd = line.c_str() + 4;
-        separation = static_cast<float>(std::atof(ipd));
+    float ipdMm = kDefaultIpdMillimetres;
+    float unitsPerMetre = kDefaultGameUnitsPerMetre;
+    float legacySeparation = 0.0f;
+    ReadNumber(line, "ipd_mm", &ipdMm);
+    ReadNumber(line, "units_per_m", &unitsPerMetre);
+    const bool hasLegacySeparation = ReadNumber(line, "ipd", &legacySeparation);
+    if (unitsPerMetre <= 1.0f || unitsPerMetre > 100000.0f) {
+        unitsPerMetre = kDefaultGameUnitsPerMetre;
     }
+    float separation = hasLegacySeparation
+                           ? legacySeparation
+                           : ipdMm * unitsPerMetre * 0.001f;
     if (separation <= 0.0f || separation > 1000.0f) {
-        separation = 10.0f;
+        separation = kDefaultIpdMillimetres /
+                     (1000.0f / kDefaultGameUnitsPerMetre);
     }
 
     const bool wasActive = g_active.exchange(true);
-    if (!wasActive || separation != g_loaded_separation) {
+    if (!wasActive || separation != g_loaded_separation ||
+        ipdMm != g_loaded_ipd_mm || unitsPerMetre != g_loaded_units_per_metre) {
         g_loaded_separation = separation;
+        g_loaded_ipd_mm = ipdMm;
+        g_loaded_units_per_metre = unitsPerMetre;
         g_eye_separation = separation;
-        H47VR_LOG_INFO("stereo: on, side-by-side eye separation %.3f game units",
-                       separation);
+        H47VR_LOG_INFO("stereo: on, IPD %.1f mm = %.3f game units "
+                       "(%.1f game units/metre)",
+                       ipdMm, separation, unitsPerMetre);
     }
 }
 
@@ -83,7 +118,8 @@ void RefreshStereo() {
 
 bool StereoRendererStart() {
     g_control_path = JoinPath(mod::GameDirectory(), L"h47vr-stereo.txt");
-    H47VR_LOG_INFO("stereo renderer: ready - create %s with 'ipd=<game units>'",
+    H47VR_LOG_INFO("stereo renderer: ready - create %s with "
+                   "'ipd_mm=<millimetres> units_per_m=<scale>'",
                    Narrow(g_control_path).c_str());
     return true;
 }
@@ -111,14 +147,30 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     }
 
     const float halfSeparation = g_eye_separation.load() * 0.5f;
-    if (!GlStereoBeginEye(0, halfSeparation)) {
+    float leftOffset = halfSeparation;
+    float rightOffset = -halfSeparation;
+    OpenXrEyePose runtimePose;
+    if (OpenXrPoseGet(&runtimePose)) {
+        // OpenXR X is positive to the right. The vertices are shifted the
+        // opposite way, just as with the fixed-IPD fallback.
+        leftOffset = -runtimePose.eyeXMetres[0] * g_loaded_units_per_metre;
+        rightOffset = -runtimePose.eyeXMetres[1] * g_loaded_units_per_metre;
+        if (!g_runtime_pose_seen.exchange(true)) {
+            H47VR_LOG_INFO("stereo: using OpenXR eye positions %.4f / %.4f m "
+                           "(offsets %.3f / %.3f game units)",
+                           runtimePose.eyeXMetres[0], runtimePose.eyeXMetres[1],
+                           leftOffset, rightOffset);
+        }
+    }
+
+    if (!GlStereoBeginEye(0, leftOffset)) {
         draw(self, nullptr, list);
         return;
     }
     draw(self, nullptr, list);
     GlStereoEndEye();
 
-    if (!GlStereoBeginEye(1, -halfSeparation)) {
+    if (!GlStereoBeginEye(1, rightOffset)) {
         return;
     }
     draw(self, nullptr, list);

@@ -6,6 +6,7 @@
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
+#include "h47vr/look_driver.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/renderer_probe.hpp"
 #include "h47vr/scene_probe.hpp"
@@ -201,6 +202,9 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
     // heartbeat: the engine rewrites the camera from input, so a one-shot write
     // would be lost again immediately.
     CameraProbeFrame(frame);
+    // Head pose arrives here: posting WM_MOUSEMOVE makes the engine rotate its
+    // own camera, so its visibility pass follows and nothing is culled.
+    LookDriverFrame(frame);
     // First few frames, then a heartbeat: enough to prove presentation is
     // intercepted and to estimate the rate without flooding the log.
     if (frame <= 5) {
@@ -211,6 +215,7 @@ BOOL WINAPI HookSwapBuffers(HDC device) {
         RendererProbeReport(frame);
         GlProbeReport(frame);
         CameraProbeReport(frame);
+        LookDriverReport(frame);
         if (WindowKeepaliveSwallowed() != 0) {
             H47VR_LOG_INFO("frame %lu window keepalive: %lu deactivation message(s) swallowed",
                            frame, WindowKeepaliveSwallowed());
@@ -383,6 +388,7 @@ bool Initialize(const char* trigger) {
     GlProbeInstall(glFilter.c_str());
     SceneProbeInstall();
     ConsoleDriverInstall();
+    LookDriverStart();
     WatchModuleLoads(L"HitmanDlc.dlc", &RequestReinstall);
     WatchModuleLoads(L"RenderOpenGL.dll", &RequestReinstall);
     WatchModuleLoads(L"System.dll", &RequestReinstall);

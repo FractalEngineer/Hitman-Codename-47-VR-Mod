@@ -22,4 +22,9 @@ bool WindowKeepaliveStart();
 // Number of deactivation messages swallowed so far, for the log.
 unsigned long WindowKeepaliveSwallowed();
 
+// The game's own window, or null until the worker has found and subclassed it.
+// Anything that needs to talk to the engine's window (the look driver posts
+// mouse messages to it) goes through this rather than enumerating again.
+void* WindowKeepaliveWindow();
+
 }  // namespace h47vr

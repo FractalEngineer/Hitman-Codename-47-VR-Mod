@@ -5,6 +5,7 @@ add_library(h47vr_core STATIC
     src/fingerprint.cpp
     src/gl_probe.cpp
     src/camera_probe.cpp
+    src/look_driver.cpp
     src/window_keepalive.cpp
     src/symbols.cpp
     src/hooks.cpp

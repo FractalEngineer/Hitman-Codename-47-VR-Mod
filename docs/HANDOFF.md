@@ -108,6 +108,39 @@ the player model all present, with no missing geometry. Rotating the geometry at
 the GL boundary instead leaves large empty regions, because the engine has
 already discarded everything outside the frustum it believes in.
 
+### The same turn, from inside the game and with no focus at all
+
+`turn.ps1` needs the foreground, which is a bad fit for a headset and worse for a
+test loop. It is no longer the primary route. The engine reads the mouse **only
+from window messages** - there is no `GetCursorPos` and no DirectInput import
+anywhere in the install, which is worth knowing before hunting for one:
+
+```powershell
+./tools/look.ps1 -Dx 220 -Verify     # same turn, no focus, no synthetic input
+```
+
+`RenderOpenGL.dll`'s window procedure (RVA `0x2A050`) routes `WM_MOUSEMOVE` and
+`WM_NCMOUSEMOVE` to the handler at RVA `0x29AC0`, which:
+
+- subtracts the client-area centre from the cursor position, so the message's
+  offset from the centre *is* the delta;
+- warps the cursor back to that centre with `SetCursorPos`;
+- accumulates the delta into the input interface, `g_pSysInterface + 0xa95`
+  (x) and `+0xa99` (y), as floats;
+- publishes the crosshair position at renderer object `+0x3e` (x) and `+0x42`
+  (y), normalised to the window and clamped to +/-0.5.
+
+`src/core/src/look_driver.cpp` therefore posts `WM_MOUSEMOVE` into the engine's
+own queue - the same message a real mouse delivers, minus the operating system's
+routing, which is what makes focus irrelevant. Verified with the game sitting in
+the background: 15 postings, 0 failures, capture difference 20.2-20.5 against a
+1.8 static control, and an exactly reversed turn returning the frame to 2.4.
+
+The windowed path only acts while the renderer holds the cursor (`renderer+299`,
+set by the `ClipCursor` wrapper at RVA `0x2B640`), which happens in gameplay.
+The fullscreen path at the same handler reads its own remembered cursor position
+(`+0x46`/`+0x4a`) instead and edge-wraps, so posted messages drive that too.
+
 ## Working commands
 
 ```powershell
@@ -139,6 +172,7 @@ Control files next to the game (all optional, delete to disable):
 
 | File | Effect |
 | --- | --- |
+| `h47vr-look.txt` | `dx=<px> dy=<px> [steps=<n>] [rate=<frames>]` - turn the engine's **own** camera by posting `WM_MOUSEMOVE`; no focus needed. Consumed on sight, so one write is one turn (`tools/look.ps1`) |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
@@ -257,6 +291,26 @@ the world vtable is at RVA `0x30298`.
 only caller of `SwapBuffers`), frame draw `0x003680` (~17-22 passes/frame),
 `glDrawElements` candidates `0x006590` and `0x006270`, 2D UI passes `0x004930`,
 `0x005300`, `0x005A10`, `0x005F20`, `0x002EC0`.
+
+Window and input, same module (found 2026-10-19 with the new
+`tools/ghidra/DumpImportCalls.java`, which dumps call sites for any import by
+name rather than only the GL ones):
+
+| Item | RVA |
+| --- | --- |
+| Window procedure (routes messages, default cases call `DefWindowProcA`) | `0x2A050` |
+| `WM_MOUSEMOVE`/`WM_NCMOUSEMOVE` handler: delta, cursor warp, accumulators | `0x29AC0` |
+| Window create/restyle and first `SetCursorPos` | `0x2B8D0` |
+| `ClipCursor` wrapper - sets `renderer+299`, gates the windowed mouse path | `0x2B640` |
+| `SetCapture` + keyboard polling (`GetAsyncKeyState` into `interface+0xab6`/`+0xab7`) | `0x2B4F0` |
+| Renderer window-manager object vtable | `0x30470` (`+0x194` is the mouse handler) |
+
+Input state the engine publishes, none of it needing the mouse itself:
+`g_pSysInterface + 0xa95`/`+0xa99` are the accumulated x/y pixel deltas (float),
+`+0x19`/`+0x1d` the render size, `+0x38f1` the fullscreen flag; the renderer
+object carries the crosshair at `+0x3e`/`+0x42` (clamped +/-0.5), the last
+cursor position at `+0x46`/`+0x4a` with its previous value at `+0x4e`/`+0x52`,
+`+0x5b` captured, and `+299` clip-enabled.
 
 Front end structure: every screen is an **exported wing group**
 (`_ZWINGROUP_*`) built by a descriptor that stores a script string, a handler, a
@@ -412,7 +466,9 @@ Ghidra scripts in `tools/ghidra/`: `ExtractAnchors.java`, `DumpReferences.java`
 (GL import call sites), `DecompileXrefs.java` (find + decompile whatever
 references a string), `DecompileCallers.java`, `DumpRefsTo.java` (refs to an
 address), `DecompileAt.java` (materialises a function Ghidra never defined, then
-decompiles it - this is what cracked the level start). Run:
+decompiles it - this is what cracked the level start), `DumpImportCalls.java`
+(call sites of any import by name, which is how the mouse path above was found).
+Run:
 
 ```
 analyzeHeadless ghidra_project h47vr -process <module> -noanalysis
@@ -448,12 +504,15 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 
 ## Immediate next steps
 
-1. **Put head pose into the engine's own camera.** Free look is already solved
-   *outside* the game - `tools/turn.ps1` takes focus and sends mouse deltas, the
-   engine rotates its own camera, and its visibility pass follows, so nothing is
-   culled. The mod has to do the same in-process: head yaw and pitch become the
-   deltas the engine already consumes. `h47vr-cam.txt` (the GL-boundary rotation)
-   drops to a fallback for the small residual a head pose adds on top.
+1. **Feed head pose in continuously.** The in-process route is in and verified -
+   `h47vr-look.txt` to `WM_MOUSEMOVE` through `src/core/src/look_driver.cpp`, no
+   focus, no synthetic input - but it is still one-shot: one file write is one
+   fixed turn. The missing half is closed-loop: each frame, work out the delta
+   between where the head points and where the engine's camera points, and post
+   that. The engine's own accumulators (`g_pSysInterface + 0xa95`/`+0xa99`) and
+   the crosshair position (`renderer+0x3e`/`+0x42`) are where its current aim is
+   observable. `h47vr-cam.txt` (the GL-boundary rotation) stays a fallback for
+   the small residual a head pose adds on top.
 2. **Make it two-eyed.** The projection is set by `glFrustum` (34.52 deg fov,
    near 5, far 16000) and by hand into a 45 deg matrix; both entries are already
    intercepted, so stereo is a change of arguments and a second viewport rather

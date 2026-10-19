@@ -131,4 +131,8 @@ unsigned long WindowKeepaliveSwallowed() {
     return g_swallowed.load();
 }
 
+void* WindowKeepaliveWindow() {
+    return reinterpret_cast<void*>(g_window.load());
+}
+
 }  // namespace h47vr

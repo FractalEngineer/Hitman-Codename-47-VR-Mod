@@ -117,6 +117,20 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
 - [x] `tools/capture.ps1`: the picture is readable at last, so "does it look right" is answered
       here rather than by the user. `PrintWindow`/`PW_RENDERFULLCONTENT` returns the window's own
       contents with no focus stolen; `-Compare` scores two shots. Noise floor ~6 on a static scene
+- [x] **Head pose can be driven from inside the game, with no focus and no synthetic input,
+      2026-10-19.** The engine reads the mouse only from window messages - there is no
+      `GetCursorPos` and no DirectInput import anywhere in the game (checked across every module
+      in the install). `RenderOpenGL.dll`'s window procedure (RVA `0x2A050`) hands `WM_MOUSEMOVE`
+      and `WM_NCMOUSEMOVE` to its handler at RVA `0x29AC0`, which subtracts the client-area
+      centre from the cursor position, warps the cursor back there with `SetCursorPos`,
+      accumulates the delta into `g_pSysInterface + 0xa95`/`+0xa99`, and publishes a normalised
+      crosshair position at renderer `+0x3e`/`+0x42` clamped to +/-0.5. So the mod posts
+      `WM_MOUSEMOVE` straight into the engine's own queue (`src/core/src/look_driver.cpp`,
+      driven by `h47vr-look.txt` via `tools/look.ps1`): the engine rotates its own camera and its
+      visibility pass follows, and unlike `SendInput` the window does not have to be in the
+      foreground. Verified with the game in the background: 15 postings, 0 failures, capture
+      difference 20.2-20.5 against a 1.8 static control, and an exactly reversed turn returns the
+      frame to 2.4. This supersedes `tools/turn.ps1` for head pose
 - [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
       `glLoadMatrixf` in modelview is identity once per frame, and `glPushMatrix`, `glPopMatrix`,
       `glMultMatrixf`, `glRotatef` and `glScalef` are never called at all. The only matrix the GL

@@ -102,6 +102,20 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       through `RenderOpenGL.dll` (`+0x0292FA` -> `+0x004483` -> `+0x008A78`, the direct caller), so
       the world-to-eye transform is applied inside the engine's OpenGL module, not in the gameplay
       module - which is exactly why rotating a gameplay-side camera object does nothing
+- [x] **Camera control solved the direct way, 2026-10-19: drive the engine's own input.**
+      The missing piece was focus. A plain `SetForegroundWindow` is refused, which is why every
+      synthetic keystroke before this landed nowhere; attaching to the foreground thread and to
+      the target's own thread first lifts that restriction, and the game then reports as
+      foreground. With focus, mouse deltas reach the engine, the engine rotates its own camera
+      from them, and **the world stays whole**: `tools/turn.ps1 -Dx 220 -Verify` moves the view
+      (mean difference 15.8-25.6 against a ~6 noise floor) and the captures show stairs, floor,
+      walls and the player model all present. That is the culling problem solved without
+      reverse-engineering the visibility pass, and it is also the shape the VR mod needs: head
+      pose becomes mouse deltas, the engine does the turning, and stereo is a separate pass over
+      an engine that is already looking the right way
+- [x] `tools/capture.ps1`: the picture is readable at last, so "does it look right" is answered
+      here rather than by the user. `PrintWindow`/`PW_RENDERFULLCONTENT` returns the window's own
+      contents with no focus stolen; `-Compare` scores two shots. Noise floor ~6 on a static scene
 - [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
       `glLoadMatrixf` in modelview is identity once per frame, and `glPushMatrix`, `glPopMatrix`,
       `glMultMatrixf`, `glRotatef` and `glScalef` are never called at all. The only matrix the GL

@@ -42,6 +42,19 @@ constexpr unsigned long kClipRva = 0x00093C50;
 // uses them as a rotation. So whatever CamUpdate runs on is camera-shaped.
 constexpr unsigned long kCameraUpdateRva = 0x00096120;
 
+// Clip decides for itself whether the group is drawn, and stores the answer in
+// its own argument slot as a byte: the box test's result at 0xfd53ea0, a forced
+// 1 at 0xfd53ea5, and a forced 0 at 0xfd53eab. The early-out paths all land on
+// the forced 0, and the instruction is `MOV byte ptr [EBP+0x18], 0` - `C6 45 18
+// 00`. The last byte is the immediate, at RVA 0x93EAE, and flipping 0 to 1 is a
+// one-byte reversible patch that makes Clip draw the group regardless.
+//
+// This exists to test the culling story rather than as a feature: if turning
+// every Clip into "draw" fills in the empty regions the vertex rotation leaves
+// behind, then the missing geometry was a Clip-level decision and not the GL
+// frustum, and the patch is a usable lever while the real camera is found.
+constexpr unsigned long kClipVisibleByteRva = 0x00093EAE;
+
 // How much of a candidate object to watch. The interesting fields sit early, but
 // the first attempt at 0x400 bytes found nothing rotation-shaped in them, so the
 // window is doubled and the *diff* across frames is what does the real work.
@@ -445,6 +458,9 @@ void ReportBasis(Candidate& c) {
 // rotated; if what is in memory is still our value, nothing happens, so calling
 // this every frame cannot compound into a spin.
 std::wstring g_write_path;
+std::wstring g_clip_all_path;
+unsigned char* g_clip_visible_byte = nullptr;
+std::atomic<bool> g_clip_all{false};
 std::atomic<bool> g_write_open{false};
 std::atomic<bool> g_write_from_frustum{false};
 std::atomic<bool> g_write_dry{false};
@@ -529,6 +545,37 @@ void RefreshCameraWrite() {
                        fromFrustum ? "frustum" : "frame",
                        index >= 0 ? " (single candidate)" : (dry ? ", dry run" : ""));
     }
+}
+
+// Forces Clip's "draw this group" decision when <game>\h47vr-clipall.txt exists,
+// and puts the original byte back when it goes away. Called from the frame hook,
+// so it is toggled live; the state check is throttled because it is a file stat.
+unsigned int g_clip_all_ticks = 0;
+
+void ApplyClipAlwaysDraw() {
+    if (g_clip_visible_byte == nullptr || g_clip_all_path.empty()) {
+        return;
+    }
+    if ((++g_clip_all_ticks & 0x1F) != 0) {
+        return;
+    }
+    const bool want =
+        ::GetFileAttributesW(g_clip_all_path.c_str()) != INVALID_FILE_ATTRIBUTES;
+    if (want == g_clip_all.load()) {
+        return;
+    }
+    DWORD old = 0;
+    if (!::VirtualProtect(g_clip_visible_byte, 1, PAGE_EXECUTE_READWRITE, &old)) {
+        H47VR_LOG_ERROR("clip draw-all: VirtualProtect failed (%lu)", ::GetLastError());
+        return;
+    }
+    *g_clip_visible_byte = want ? 0x01 : 0x00;
+    DWORD ignored = 0;
+    ::VirtualProtect(g_clip_visible_byte, 1, old, &ignored);
+    ::FlushInstructionCache(::GetCurrentProcess(), g_clip_visible_byte, 1);
+    g_clip_all = want;
+    H47VR_LOG_INFO("clip draw-all: %s (byte at %p)", want ? "on" : "off",
+                   g_clip_visible_byte);
 }
 
 void ApplyCameraWrite() {
@@ -684,6 +731,11 @@ bool CameraProbeInstall() {
 
     g_gate = JoinPath(mod::GameDirectory(), L"h47vr-camobj.txt");
     g_write_path = JoinPath(mod::GameDirectory(), L"h47vr-camwrite.txt");
+    g_clip_all_path = JoinPath(mod::GameDirectory(), L"h47vr-clipall.txt");
+    g_clip_visible_byte =
+        reinterpret_cast<unsigned char*>(gameplay) + kClipVisibleByteRva;
+    H47VR_LOG_INFO("clip draw-all byte at %p (rva 0x%06lX), currently 0x%02X",
+                   g_clip_visible_byte, kClipVisibleByteRva, *g_clip_visible_byte);
     h47vr_camera_args_target = reinterpret_cast<void*>(&ObserveCameraTransform);
 
     void* target = reinterpret_cast<char*>(gameplay) + kClipRva;
@@ -716,6 +768,7 @@ bool CameraProbeRearm() {
 // write here lands before the next frame is built.
 void CameraProbeFrame(unsigned long frame) {
     RefreshCameraWrite();
+    ApplyClipAlwaysDraw();
     if (!g_write_from_frustum.load()) {
         ApplyCameraWrite();
     }

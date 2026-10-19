@@ -72,6 +72,39 @@ bring back what was thrown away. The engine's own view has to be driven instead,
 and finding it is the current thread of work; the leads are in the
 reverse-engineering map below.
 
+## The tooling can now see and drive the game
+
+Two capabilities landed on 2026-10-19 that change how everything above should be
+verified, and both correct an old "dead end" note:
+
+- **The picture is readable.** `tools/capture.ps1` grabs the game window with
+  `PrintWindow`/`PW_RENDERFULLCONTENT` - a clean 800x600 frame, no focus stolen,
+  works with the game behind other windows - and `-Compare` reports a mean
+  absolute per-channel difference between two shots. The noise floor on a static
+  scene is about 6 (camera sway), so anything clearly above that is a real
+  change. Questions about what the player sees no longer need the player.
+- **Focus can be taken.** A plain `SetForegroundWindow` is refused, which is why
+  synthetic input never landed. `Focus-GameWindow` in `tools/Keys.ps1` now
+  attaches to the current foreground thread and to the target's own thread first,
+  which lifts the restriction: verified, the game reports as foreground.
+
+With focus, input works - and that is the camera control this project has been
+missing:
+
+```powershell
+./tools/turn.ps1 -Dx 220 -Verify     # turns the camera right, ~20 degrees
+./tools/turn.ps1 -Dy -120            # looks up
+```
+
+**Driving the engine's own camera this way is the answer to the culling problem.**
+The engine reads the mouse as deltas and rotates its own camera, so its
+visibility pass and its geometry transform both follow and the world stays
+whole - verified with captures: `turn.ps1` moved the view (mean difference
+15.8-25.6 against a ~6 noise floor) and the frames show stairs, floor, walls and
+the player model all present, with no missing geometry. Rotating the geometry at
+the GL boundary instead leaves large empty regions, because the engine has
+already discarded everything outside the frustum it believes in.
+
 ## Working commands
 
 ```powershell
@@ -321,11 +354,14 @@ mechanism, not as a camera finder.
 - **`objectDrawA`** (RenderOpenGL RVA `0x6590`) stays `0` while a level renders
   at 62 FPS. It is **not** a world-geometry signal; that part of the renderer map
   needs redoing.
-- **Synthesised keyboard input.** `Keys.ps1` now emits hardware scan codes and
-  sends key-down and key-up in separate calls with a gap (DirectInput-era games
-  ignore VK-only zero-duration taps), and focus was verified. It still never
-  skipped the intro. The user presses ESC. Do not pour more time into input
-  injection unless it becomes necessary.
+- **Synthesised keyboard input - reopened, and now viable.** This was written off
+  because the keys never landed, but the real cause was focus: `SetForegroundWindow`
+  was being refused, so the events went to whatever window did have focus. With
+  `Focus-GameWindow`'s AttachThreadInput route the game genuinely takes the
+  foreground, and **mouse deltas now demonstrably drive the engine's camera**
+  (`tools/turn.ps1`, verified by capture). Keyboard through the same path has not
+  been re-tested yet, so do not assume ESC now works - but "input injection does
+  not work here" is no longer true, and the mouse half is proven.
 - **Moving the camera through the GL matrix pipeline.** There is no camera
   matrix there to move: `glLoadMatrixf` in modelview is identity once per frame,
   and `glPushMatrix`, `glPopMatrix`, `glMultMatrixf`, `glRotatef` and `glScalef`

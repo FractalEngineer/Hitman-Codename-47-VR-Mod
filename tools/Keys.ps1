@@ -41,6 +41,11 @@ public static class H47Input {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
     [DllImport("user32.dll")] public static extern short VkKeyScan(char ch);
     [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
@@ -111,8 +116,42 @@ function Get-GameProcess {
 function Focus-GameWindow {
     param($Process)
     if ($Process.MainWindowHandle -eq 0) { return $false }
-    [void][H47Input]::ShowWindow($Process.MainWindowHandle, 9)
-    [void][H47Input]::SetForegroundWindow($Process.MainWindowHandle)
-    Start-Sleep -Milliseconds 150
-    return ([H47Input]::GetForegroundWindow() -eq $Process.MainWindowHandle)
+    $handle = $Process.MainWindowHandle
+
+    # SetForegroundWindow on its own is refused, because this process did not
+    # receive the last input. Attaching to the current foreground thread and to
+    # the target's own thread first lifts that restriction - verified working,
+    # where the plain call silently left the focus where it was.
+    $foreground = [H47Input]::GetForegroundWindow()
+    $foregroundThread = [H47Input]::GetWindowThreadProcessId($foreground, [IntPtr]::Zero)
+    $targetThread = [H47Input]::GetWindowThreadProcessId($handle, [IntPtr]::Zero)
+    $me = [H47Input]::GetCurrentThreadId()
+
+    [void][H47Input]::AttachThreadInput($me, $foregroundThread, $true)
+    [void][H47Input]::AttachThreadInput($me, $targetThread, $true)
+    try {
+        [void][H47Input]::ShowWindow($handle, 9)
+        [void][H47Input]::BringWindowToTop($handle)
+        [void][H47Input]::SetForegroundWindow($handle)
+    } finally {
+        [void][H47Input]::AttachThreadInput($me, $targetThread, $false)
+        [void][H47Input]::AttachThreadInput($me, $foregroundThread, $false)
+    }
+    Start-Sleep -Milliseconds 500
+    return ([H47Input]::GetForegroundWindow() -eq $handle)
+}
+
+# Relative mouse movement, in small steps. The game reads the mouse as deltas and
+# turns its own camera from them, so a single large jump is discarded; small
+# steps at a realistic rate turn the view the way a hand does - and because the
+# engine does the turning, its culling follows and the world stays whole.
+function Move-GameMouse {
+    param([int]$Dx, [int]$Dy, [int]$Steps = 15, [int]$StepDelayMs = 45)
+    if ($Steps -lt 1) { $Steps = 1 }
+    $stepX = [int][math]::Round($Dx / $Steps)
+    $stepY = [int][math]::Round($Dy / $Steps)
+    for ($i = 0; $i -lt $Steps; $i++) {
+        [H47Input]::mouse_event(0x0001, $stepX, $stepY, 0, [IntPtr]::Zero)
+        Start-Sleep -Milliseconds $StepDelayMs
+    }
 }

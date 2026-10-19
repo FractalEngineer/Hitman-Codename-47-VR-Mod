@@ -10,8 +10,10 @@ driver as the runtime.
 backend (`src/core/src/openxr_pose.cpp`). It initializes Virtual Desktop inside
 the running game on the game's current WGL context. With no headset streaming,
 `xrGetSystem` returns `XR_ERROR_FORM_FACTOR_UNAVAILABLE` and the game continues
-on its fixed 67 mm fallback. A live headset session and swapchain submission are
-still the remaining presentation gate.
+on its fixed 67 mm fallback. When views are valid, runtime eye X, asymmetric FOV
+tangents and head orientation feed the stereo renderer and the engine's own
+look-input path. A live headset session and swapchain submission are still the
+remaining presentation gate.
 
 ## Gate result
 
@@ -134,7 +136,8 @@ a deliberate test.
 ## What is not proven yet
 
 - The in-game backend reaches `xrGetSystem` on the game's WGL context; it still
-  needs a connected headset to create and validate the session.
+  needs a connected headset to validate eye positions, asymmetric tangents and
+  head tracking.
 - Whether `SwapBuffers` interception is sufficient for presentation control, or
   whether the engine's scene draw has to be re-entered.
 - Nothing here exercised a real headset. The gate proves API and context
@@ -147,6 +150,11 @@ a deliberate test.
 therefore belongs on `gdi32`, either by import table patching in
 `RenderOpenGL.dll` or by a hook. The proxy remains the load point for the mod; it
 is not the presentation hook.
+
+The intended presentation split is theater mode for menus, the intro and
+in-game cinematics, with immersive stereo only while MouseConCam confirms
+gameplay. Theater mode should submit one flat screen layer rather than
+duplicating those perspective frames per eye.
 
 ## Engine constraints to respect
 

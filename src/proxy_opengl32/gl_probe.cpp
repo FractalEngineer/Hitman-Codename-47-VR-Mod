@@ -138,6 +138,8 @@ unsigned int g_gate_ticks = 0;
 // screen.
 std::wstring g_camera_path;
 std::atomic<bool> g_perspective{false};
+std::atomic<double> g_perspective_near{5.0};
+std::atomic<double> g_perspective_far{16000.0};
 std::atomic<bool> g_camera_active{false};
 std::atomic<unsigned long> g_transformed_vertices{0};
 // Row-major on purpose. The first version stored this in GL's column-major
@@ -361,6 +363,7 @@ DrawArraysFn g_real_draw_arrays = nullptr;
 
 int g_arg_logs = 0;
 bool g_frustum_reported = false;
+bool g_runtime_projection_reported = false;
 
 // Defined with the vertex counters below; declared here so the frustum detour
 // can use it too. Each caller keeps its own budget, or the vertex path - which
@@ -376,6 +379,10 @@ void WINAPI DetourFrustum(double left, double right, double bottom, double top,
     ++g_counts[kFrustum];
     // glFrustum always builds a perspective, so this is a 3D pass.
     g_perspective = true;
+    if (zNear > 0.0 && zFar > zNear) {
+        g_perspective_near = zNear;
+        g_perspective_far = zFar;
+    }
     // The function that builds the world projection every frame is engine code
     // that has the camera in hand, and glFrustum runs only about twice a frame -
     // so a stack here is clean, unlike one taken at a vertex call.
@@ -423,6 +430,16 @@ void WINAPI DetourLoadMatrixf(const float* matrix) {
             const bool perspective = std::fabs(matrix[11] + 1.0f) < 0.01f &&
                                      std::fabs(matrix[15]) < 0.01f;
             g_perspective = perspective;
+            if (perspective) {
+                const double a = matrix[10];
+                const double b = matrix[14];
+                const double nearPlane = b / (a - 1.0);
+                const double farPlane = b / (a + 1.0);
+                if (nearPlane > 0.0 && farPlane > nearPlane) {
+                    g_perspective_near = nearPlane;
+                    g_perspective_far = farPlane;
+                }
+            }
         }
     }
     if (matrix != nullptr) {
@@ -683,14 +700,17 @@ void WINAPI DetourDrawArrays(unsigned int mode, int first, int count) {
 // --- stereo eye pass setup --------------------------------------------------
 
 bool StereoAvailableImpl() {
-    return true;
+    return g_real_matrix_mode != nullptr && g_real_push_matrix != nullptr &&
+           g_real_pop_matrix != nullptr && g_real_mult_matrix != nullptr &&
+           g_real_load_identity != nullptr && g_real_frustum != nullptr &&
+           g_real_viewport != nullptr;
 }
 
 bool StereoPerspectiveImpl() {
     return g_perspective.load();
 }
 
-bool StereoBeginEyeImpl(int eye, float eyeOffset) {
+bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians) {
     if (!g_perspective.load()) {
         return false;
     }
@@ -708,17 +728,53 @@ bool StereoBeginEyeImpl(int eye, float eyeOffset) {
         g_stereo_saved_viewport[i] = g_viewport[i];
     }
 
-    // Each eye gets half of the original viewport. Scaling projection X by 0.5
-    // keeps the original vertical FOV and gives each half the correct aspect.
-    const float scaleX[16] = {
-        0.5f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f,
-    };
     g_real_matrix_mode(kGlProjection);
     g_real_push_matrix();
-    g_real_mult_matrix(scaleX);
+
+    bool asymmetric = false;
+    const double nearPlane = g_perspective_near.load();
+    const double farPlane = g_perspective_far.load();
+    if (fovRadians != nullptr && nearPlane > 0.0 && farPlane > nearPlane &&
+        fovRadians[0] < 0.0f && fovRadians[1] > 0.0f &&
+        fovRadians[2] > 0.0f && fovRadians[3] < 0.0f &&
+        std::isfinite(fovRadians[0]) && std::isfinite(fovRadians[1]) &&
+        std::isfinite(fovRadians[2]) && std::isfinite(fovRadians[3])) {
+        // OpenXR supplies the four frustum planes relative to this eye's
+        // orientation. Rebuild rather than multiply: glFrustum composes with
+        // the matrix already on the stack, and the engine's symmetric
+        // projection must be replaced for an asymmetric headset view.
+        g_real_load_identity();
+        g_real_frustum(
+            std::tan(static_cast<double>(fovRadians[0])) * nearPlane,
+            std::tan(static_cast<double>(fovRadians[1])) * nearPlane,
+            std::tan(static_cast<double>(fovRadians[3])) * nearPlane,
+            std::tan(static_cast<double>(fovRadians[2])) * nearPlane,
+            nearPlane, farPlane);
+        asymmetric = true;
+    } else {
+        // Desktop diagnostic: each eye gets half of the original viewport.
+        // Scaling projection X by 0.5 keeps the vertical FOV and gives each
+        // half the correct aspect.
+        const float scaleX[16] = {
+            0.5f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+        };
+        g_real_mult_matrix(scaleX);
+    }
+
+    if (asymmetric && !g_runtime_projection_reported) {
+        g_runtime_projection_reported = true;
+        H47VR_LOG_INFO("stereo: eye %d asymmetric projection L/R/U/D "
+                       "%.2f/%.2f/%.2f/%.2f deg, near %.3f far %.3f",
+                       eye,
+                       fovRadians[0] * 57.29577951308232f,
+                       fovRadians[1] * 57.29577951308232f,
+                       fovRadians[2] * 57.29577951308232f,
+                       fovRadians[3] * 57.29577951308232f,
+                       nearPlane, farPlane);
+    }
 
     const int halfWidth = g_stereo_saved_viewport[2] / 2;
     const int eyeX = g_stereo_saved_viewport[0] +

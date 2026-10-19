@@ -149,28 +149,35 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
     const float halfSeparation = g_eye_separation.load() * 0.5f;
     float leftOffset = halfSeparation;
     float rightOffset = -halfSeparation;
+    const float* leftFov = nullptr;
+    const float* rightFov = nullptr;
     OpenXrEyePose runtimePose;
     if (OpenXrPoseGet(&runtimePose)) {
         // OpenXR X is positive to the right. The vertices are shifted the
         // opposite way, just as with the fixed-IPD fallback.
         leftOffset = -runtimePose.eyeXMetres[0] * g_loaded_units_per_metre;
         rightOffset = -runtimePose.eyeXMetres[1] * g_loaded_units_per_metre;
+        if (runtimePose.fovValid) {
+            leftFov = runtimePose.fov[0];
+            rightFov = runtimePose.fov[1];
+        }
         if (!g_runtime_pose_seen.exchange(true)) {
             H47VR_LOG_INFO("stereo: using OpenXR eye positions %.4f / %.4f m "
-                           "(offsets %.3f / %.3f game units)",
+                           "(offsets %.3f / %.3f game units), runtime asymmetric FOV %s",
                            runtimePose.eyeXMetres[0], runtimePose.eyeXMetres[1],
-                           leftOffset, rightOffset);
+                           leftOffset, rightOffset,
+                           runtimePose.fovValid ? "enabled" : "unavailable");
         }
     }
 
-    if (!GlStereoBeginEye(0, leftOffset)) {
+    if (!GlStereoBeginEye(0, leftOffset, leftFov)) {
         draw(self, nullptr, list);
         return;
     }
     draw(self, nullptr, list);
     GlStereoEndEye();
 
-    if (!GlStereoBeginEye(1, rightOffset)) {
+    if (!GlStereoBeginEye(1, rightOffset, rightFov)) {
         return;
     }
     draw(self, nullptr, list);

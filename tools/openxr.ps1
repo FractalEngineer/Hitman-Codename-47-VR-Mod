@@ -6,8 +6,9 @@
 .DESCRIPTION
     The pose backend is gated by <game>\h47vr-openxr.txt so normal desktop play
     never initializes a headset runtime. When enabled, it creates an OpenXR
-    session on the game's current WGL context and logs predicted eye positions.
-    This is still a diagnostic step; it does not submit game frames to a headset.
+    session on the game's current WGL context and feeds predicted eye positions,
+    asymmetric FOV tangents and head orientation into the renderer. This is
+    still a diagnostic step; it does not submit game frames to a headset.
 #>
 [CmdletBinding()]
 param(

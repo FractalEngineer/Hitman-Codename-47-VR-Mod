@@ -10,7 +10,9 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <intrin.h>
@@ -24,6 +26,7 @@ std::atomic<unsigned long> g_turns{0};
 std::atomic<unsigned long> g_messages{0};
 std::atomic<unsigned long> g_post_failures{0};
 std::atomic<unsigned long> g_warp_swallowed{0};
+std::atomic<unsigned long> g_head_posts{0};
 std::atomic<bool> g_cursor_guard{false};
 
 // One turn in flight. The turn is split across frames the way a hand moves a
@@ -50,6 +53,23 @@ double g_pending_deg_per_px = 0.0;
 int g_pending_steps = 15;
 int g_pending_rate = 1;
 bool g_reported_window = false;
+
+// The predicted head pose is an absolute target in the runtime's local space.
+// The first valid sample becomes zero so tracking starts aligned with the game
+// camera rather than whichever direction the headset happened to face at boot.
+bool g_head_valid = false;
+bool g_head_reference_valid = false;
+double g_head_yaw = 0.0;
+double g_head_pitch = 0.0;
+double g_head_reference_yaw = 0.0;
+double g_head_reference_pitch = 0.0;
+
+// A headset can legitimately move much farther in one frame than a mouse. Keep
+// each posted message within the engine's comfortable range, then let the next
+// frames close the remaining error. The deadband avoids a stream of one-pixel
+// corrections from prediction noise.
+constexpr double kHeadDeadbandDegrees = 0.12;
+constexpr int kHeadMaxPixelsPerFrame = 24;
 
 // Dead reckoning of what we have asked the engine's camera to do. The engine
 // integrates the deltas we post into the player's aim, so this stays true as
@@ -407,6 +427,53 @@ void TryPendingAbsolute(unsigned long frame) {
     BeginTurn(frame, steps, rate);
 }
 
+void ApplyHeadPose(unsigned long frame) {
+    if (!g_head_valid || !g_head_reference_valid ||
+        g_steps_done < g_steps_total) {
+        return;
+    }
+
+    CameraReadback readback;
+    double currentYaw = 0.0;
+    double currentPitch = 0.0;
+    if (!ReadCurrentAim(&currentYaw, &currentPitch, &readback)) {
+        // Menus, cutscenes and an unloaded front end have no MouseConCam
+        // orientation to drive. That leaves their own camera alone.
+        return;
+    }
+
+    const double targetYaw = Wrap180(g_head_yaw - g_head_reference_yaw);
+    const double targetPitch = -(g_head_pitch - g_head_reference_pitch);
+    const double errorYaw = Wrap180(targetYaw - currentYaw);
+    const double errorPitch = targetPitch - currentPitch;
+    if (std::fabs(errorYaw) < kHeadDeadbandDegrees &&
+        std::fabs(errorPitch) < kHeadDeadbandDegrees) {
+        return;
+    }
+
+    double pixelsX = errorYaw / g_deg_per_px;
+    double pixelsY = errorPitch / g_deg_per_px;
+    pixelsX = std::clamp(pixelsX, -static_cast<double>(kHeadMaxPixelsPerFrame),
+                         static_cast<double>(kHeadMaxPixelsPerFrame));
+    pixelsY = std::clamp(pixelsY, -static_cast<double>(kHeadMaxPixelsPerFrame),
+                         static_cast<double>(kHeadMaxPixelsPerFrame));
+    const int dx = static_cast<int>(pixelsX < 0.0 ? pixelsX - 0.5 : pixelsX + 0.5);
+    const int dy = static_cast<int>(pixelsY < 0.0 ? pixelsY - 0.5 : pixelsY + 0.5);
+    if (dx == 0 && dy == 0) {
+        return;
+    }
+
+    PostStep(dx, dy);
+    g_px_x += dx;
+    g_px_y += dy;
+    ++g_head_posts;
+    if (g_head_posts.load() == 1) {
+        H47VR_LOG_INFO("look driver: head tracking active; first correction "
+                       "dx=%d dy=%d (target yaw=%.2f pitch=%.2f, frame %lu)",
+                       dx, dy, targetYaw, targetPitch, frame);
+    }
+}
+
 }  // namespace
 
 bool LookDriverStart() {
@@ -437,6 +504,34 @@ void LookDriverRearm() {
         H47VR_LOG_INFO("look driver: cursor guard installed - the engine's cursor "
                        "warp is swallowed so turns do not move the desktop pointer");
     }
+}
+
+void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees) {
+    if (!valid) {
+        if (g_head_valid) {
+            H47VR_LOG_INFO("look driver: head tracking paused (no valid pose)");
+        }
+        g_head_valid = false;
+        g_head_reference_valid = false;
+        return;
+    }
+
+    if (!g_head_valid) {
+        g_head_valid = true;
+        H47VR_LOG_INFO("look driver: head tracking available");
+    }
+    if (!g_head_reference_valid) {
+        g_head_reference_valid = true;
+        g_head_reference_yaw = yawDegrees;
+        g_head_reference_pitch = pitchDegrees;
+        g_px_x = 0.0;
+        g_px_y = 0.0;
+        H47VR_LOG_INFO("look driver: head tracking recentered at yaw=%.2f "
+                       "pitch=%.2f",
+                       yawDegrees, pitchDegrees);
+    }
+    g_head_yaw = yawDegrees;
+    g_head_pitch = pitchDegrees;
 }
 
 void LookDriverFrame(unsigned long frame) {
@@ -503,6 +598,8 @@ void LookDriverFrame(unsigned long frame) {
         return;
     }
 
+    ApplyHeadPose(frame);
+
     if (g_finish_frame != 0) {
         return;
     }
@@ -522,9 +619,11 @@ void LookDriverReport(unsigned long frame) {
         H47VR_LOG_INFO("look driver: game window %p", WindowKeepaliveWindow());
     }
     H47VR_LOG_INFO("look driver: %lu turn(s), %lu mouse message(s) posted, %lu failed, "
-                   "%lu cursor warp(s) swallowed (frame %lu)",
+                   "%lu cursor warp(s) swallowed, head tracking %s (%lu correction(s), "
+                   "frame %lu)",
                    g_turns.load(), g_messages.load(), g_post_failures.load(),
-                   g_warp_swallowed.load(), frame);
+                   g_warp_swallowed.load(), g_head_valid ? "active" : "off",
+                   g_head_posts.load(), frame);
 }
 
 }  // namespace h47vr

@@ -6,6 +6,7 @@ namespace h47vr {
 
 struct OpenXrEyePose {
     bool valid = false;
+    bool fovValid = false;
     float eyeXMetres[2] = {};
     float fov[2][4] = {};
     float yawDegrees = 0.0f;

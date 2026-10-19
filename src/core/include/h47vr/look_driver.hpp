@@ -30,6 +30,13 @@ bool LookDriverStart();
 // Called once per presented frame, on the engine's render thread.
 void LookDriverFrame(unsigned long frame);
 
+// Supplies the latest headset orientation in OpenXR's convention: yaw positive
+// to the right and pitch positive up. The first valid sample after tracking
+// starts becomes the recenter reference. The driver converts the target into
+// the engine's own mouse deltas, so this remains subject to the same gameplay
+// readback gate as an absolute look request.
+void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees);
+
 // Installs the cursor guard if the renderer is loaded. Safe to call repeatedly,
 // and needs calling again after a module reload drops the patch.
 void LookDriverRearm();

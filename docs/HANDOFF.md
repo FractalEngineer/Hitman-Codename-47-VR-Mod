@@ -11,10 +11,10 @@ as the work**.
 
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
-Repo state: `43d58f3` locally, `origin/main` at `f25a345` - the last three
-commits still need `git push origin HEAD`. The game may or may not be running;
-it keeps rendering while the desktop is used, so a session is free to launch it
-and walk away.
+Repo state: local `main` contains `8125855` plus the asymmetric-projection and
+head-tracking follow-up described below, while `origin/main` remains four
+commits behind. The game may or may not be running; it keeps rendering while the
+desktop is used, so a session is free to launch it and walk away.
 
 ## Where things stand (2026-10-19)
 
@@ -45,7 +45,8 @@ half with `-IPD/2`. Projection X is scaled by 0.5 so vertical FOV and half-scree
 aspect stay correct. The training capture shows clear parallax between the two
 eyes, keeps the HUD and subtitles in each eye, and still reports 60 FPS. This is
 a fixed-IPD monitor prototype using the user's 67 mm IPD at 100 game
-units/metre; OpenXR eye poses and asymmetric frusta are next.
+units/metre; runtime eye poses and asymmetric frusta now feed this path and
+await a live headset.
 
 **The OpenXR pose backend is integrated behind a gate, 2026-10-19.** Creating
 `h47vr-openxr.txt` makes the render thread initialize OpenXR on the game's
@@ -56,6 +57,18 @@ Virtual Desktop initialised cleanly but `xrGetSystem` returned
 kept running on the 6.7-unit fixed fallback. The pose-only mode intentionally
 submits no swapchain or projection layer yet, so it is not a VR presentation
 path.
+
+**Runtime FOV and head orientation are wired into the game, 2026-10-19.** The
+stereo eye pass now receives each view's four FOV tangents. The proxy remembers
+the engine's perspective near/far planes and replaces the desktop half-viewport
+scale with a per-eye `glFrustum` for runtime views. Predicted left-eye yaw and
+pitch feed `look_driver.cpp`, which converts them into the engine's own mouse
+deltas with first-pose recentering, a 0.12-degree deadband and a 24-pixel
+per-frame cap. It only acts while MouseConCam readback is available, so menus and
+cinematics keep their own camera. The no-HMD path was live-tested: OpenXR still
+degrades cleanly, head tracking stays off, stereo holds 60 FPS at 67 mm, and
+closed-loop absolute aim still returns exactly to 0. The runtime tangent branch
+itself needs a live headset.
 
 The game's own level start is
 
@@ -389,6 +402,11 @@ Two things the injected rotation cannot do, both worth remembering:
   view and 7.41 between left and right at the initial 10-unit test separation,
   with 60 FPS retained. Simulation is not duplicated because this function
   consumes already-built draw lists.
+- **Runtime eye projection and head feed.** When OpenXR views are valid, eye X
+  positions replace the fixed separation, each view's four FOV tangents rebuild
+  the projection through `glFrustum`, and left-eye yaw/pitch drive MouseConCam
+  through the existing no-focus input path. This is integrated and builds, but
+  no connected headset was available to validate the tangent branch.
 - **OpenXR pose initialization from the game.** The gated backend initializes
   the 32-bit Virtual Desktop runtime inside the game process, creates an
   instance with `XR_KHR_opengl_enable`, reaches the runtime system query and
@@ -689,12 +707,12 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 Milestone 2 continues here. The eye loop and a fixed-IPD side-by-side prototype
 are working; the remaining work is to make the stereo match the headset.
 
-1. **Validate and finish runtime eye poses.** The gated backend already feeds
-   predicted `xrLocateViews` eye X positions into the eye-space offset. With a
-   live Virtual Desktop session, confirm the reported separation is about
-   67 mm, then build the asymmetric per-eye projection from the runtime FOV
-   tangents. The current half-viewport projection scale is the monitor
-   prototype, not the headset projection path.
+1. **Validate runtime poses, asymmetric FOV and head tracking.** The backend now
+   feeds predicted eye X, all four FOV tangents and left-eye orientation. With a
+   live Virtual Desktop session, confirm the eye separation is about 67 mm,
+   check that tangent orientation and yaw/pitch direction are correct, and watch
+   frame pacing while the per-frame head corrections are active. The
+   half-viewport scale remains only as the no-runtime desktop fallback.
 2. **Calibrate game units and eye height.** The 10-unit IPD default is a first
    test value inferred from the 150-unit follow-camera distance. Measure the
    training level's geometry and near clip, then express IPD and head translation
@@ -702,10 +720,14 @@ are working; the remaining work is to make the stereo match the headset.
 3. **Render to the headset.** Side-by-side on the desktop is the readable test
    target. The shipping path needs per-eye render targets or accepted OpenXR
    swapchain images, plus a single presentation after both eyes are complete.
-4. **Hide the player's head and tune visibility.** The camera is still behind the
+4. **Use theater mode outside gameplay.** Menus, the intro and in-game
+   cinematics should appear on one flat virtual screen, not two replicated
+   perspective eyes. Switch to immersive stereo only when MouseConCam confirms
+   gameplay, then retain theater mode for every scripted or menu state.
+5. **Hide the player's head and tune visibility.** The camera is still behind the
    player model. Separate gameplay camera control from the headset pose and
    remove only the head, while keeping the body for shadows and reflections.
-5. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so
+6. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so
    the world path is the immediate-mode `0x3680` face-list consumer. Confirm its
    state restoration and transparent-pass ordering under heavier scenes, then
    install x32dbg if a calling convention needs direct confirmation.

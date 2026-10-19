@@ -1,6 +1,7 @@
 #include "h47vr/openxr_pose.hpp"
 
 #include "h47vr/log.hpp"
+#include "h47vr/look_driver.hpp"
 #include "h47vr/mod.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/symbols.hpp"
@@ -33,6 +34,12 @@ XrSession g_session = XR_NULL_HANDLE;
 XrSpace g_local_space = XR_NULL_HANDLE;
 XrSessionState g_session_state = XR_SESSION_STATE_UNKNOWN;
 
+void InvalidatePose() {
+    std::lock_guard<std::mutex> lock(g_pose_mutex);
+    g_pose.valid = false;
+    g_pose.fovValid = false;
+}
+
 bool Succeeded(XrResult result, const char* step) {
     if (XR_SUCCEEDED(result)) {
         H47VR_LOG_INFO("openxr: %s", step);
@@ -51,6 +58,16 @@ bool HasExtension(const std::vector<XrExtensionProperties>& extensions,
         }
     }
     return false;
+}
+
+bool ValidFov(const XrFovf& fov) {
+    constexpr float kHalfPi = 1.5707963267948966f;
+    return std::isfinite(fov.angleLeft) && std::isfinite(fov.angleRight) &&
+           std::isfinite(fov.angleUp) && std::isfinite(fov.angleDown) &&
+           fov.angleLeft < 0.0f && fov.angleRight > 0.0f &&
+           fov.angleUp > 0.0f && fov.angleDown < 0.0f &&
+           fov.angleLeft > -kHalfPi && fov.angleRight < kHalfPi &&
+           fov.angleUp < kHalfPi && fov.angleDown > -kHalfPi;
 }
 
 HGLRC CurrentGlContext() {
@@ -169,6 +186,8 @@ bool Initialize(HDC device) {
 }
 
 void LocateViews() {
+    InvalidatePose();
+
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
     XrFrameWaitInfo waitInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrResult result = ::xrWaitFrame(g_session, &waitInfo, &frameState);
@@ -203,12 +222,14 @@ void LocateViews() {
         OpenXrEyePose sample;
         sample.valid = true;
         sample.frame = frameState.predictedDisplayTime;
+        sample.fovValid = true;
         for (int eye = 0; eye < 2; ++eye) {
             sample.eyeXMetres[eye] = views[eye].pose.position.x;
             sample.fov[eye][0] = views[eye].fov.angleLeft;
             sample.fov[eye][1] = views[eye].fov.angleRight;
             sample.fov[eye][2] = views[eye].fov.angleUp;
             sample.fov[eye][3] = views[eye].fov.angleDown;
+            sample.fovValid = sample.fovValid && ValidFov(views[eye].fov);
         }
 
         const XrQuaternionf& q = views[0].pose.orientation;
@@ -250,10 +271,8 @@ void OpenXrPoseFrame(HDC device, unsigned long frame) {
     const bool wanted =
         ::GetFileAttributesW(g_gate_path.c_str()) != INVALID_FILE_ATTRIBUTES;
     if (!wanted) {
-        {
-            std::lock_guard<std::mutex> lock(g_pose_mutex);
-            g_pose.valid = false;
-        }
+        LookDriverSetHeadPose(false, 0.0, 0.0);
+        InvalidatePose();
         // Allow a failed no-headset attempt to be retried after the tool is
         // toggled without restarting the game.
         if (g_session == XR_NULL_HANDLE) {
@@ -269,6 +288,7 @@ void OpenXrPoseFrame(HDC device, unsigned long frame) {
     if (!g_attempted.load()) {
         if (!Initialize(device)) {
             g_attempted = true;
+            LookDriverSetHeadPose(false, 0.0, 0.0);
             H47VR_LOG_WARN("openxr: pose backend unavailable; fixed IPD remains active");
             return;
         }
@@ -276,19 +296,30 @@ void OpenXrPoseFrame(HDC device, unsigned long frame) {
     }
 
     if (g_session == XR_NULL_HANDLE) {
+        InvalidatePose();
+        LookDriverSetHeadPose(false, 0.0, 0.0);
         return;
     }
     PollEvents();
     if (!g_session_running.load()) {
+        InvalidatePose();
+        LookDriverSetHeadPose(false, 0.0, 0.0);
         return;
     }
     LocateViews();
+    OpenXrEyePose pose;
+    const bool tracked = OpenXrPoseGet(&pose);
+    LookDriverSetHeadPose(tracked, pose.yawDegrees, pose.pitchDegrees);
     if (frame % 300 == 0) {
-        OpenXrEyePose pose;
-        if (OpenXrPoseGet(&pose)) {
-            H47VR_LOG_INFO("openxr: eye X %.4f / %.4f m, head yaw %.2f pitch %.2f",
+        if (tracked) {
+            H47VR_LOG_INFO("openxr: eye X %.4f / %.4f m, head yaw %.2f pitch %.2f, "
+                           "FOV L/R/U/D %.2f/%.2f/%.2f/%.2f deg",
                            pose.eyeXMetres[0], pose.eyeXMetres[1],
-                           pose.yawDegrees, pose.pitchDegrees);
+                           pose.yawDegrees, pose.pitchDegrees,
+                           pose.fov[0][0] * 57.29577951308232f,
+                           pose.fov[0][1] * 57.29577951308232f,
+                           pose.fov[0][2] * 57.29577951308232f,
+                           pose.fov[0][3] * 57.29577951308232f);
         }
     }
 }

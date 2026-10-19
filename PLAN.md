@@ -280,11 +280,14 @@ the "camera hook" the gate asked for is not needed for it.
       not draw the scene
 - [~] Use the runtime's eye poses and asymmetric projections. `openxr_pose.cpp` now creates a
       gated OpenXR session on the game's current WGL context, locates predicted stereo views and
-      exposes their eye X positions to the renderer. With no active HMD it logs the runtime failure
-      and leaves the fixed-IPD path running. The current fallback uses the user's 67 mm IPD at a
-      working 100-units-per-metre scale (6.7 game units), with projection X scaled by 0.5 for
-      symmetric half-viewports. Applying the runtime FOV tangents, head orientation and real
-      headset swapchains remains
+      exposes their eye X positions, FOV tangents and head orientation to the renderer. The proxy
+      now replaces the symmetric 0.5 X scale with a per-eye `glFrustum` built from the runtime
+      tangents and the engine's recorded near/far planes. Predicted yaw and pitch drive the
+      engine's own mouse path through `look_driver.cpp`, with first-pose recentering, a small
+      deadband and a per-frame pixel cap. With no active HMD it logs the runtime failure, leaves
+      head tracking off, and keeps the user's 67 mm IPD at 100 game units/metre (6.7 units). Live
+      HMD validation of eye separation, tangent orientation, head direction and frame pacing,
+      plus real headset swapchains, remains
 - [x] **Apply camera changes before visibility calculation - solved, 2026-10-19, by not
       calculating them here at all.** Because the camera is driven through the engine's own
       input, the engine does the visibility pass itself with the camera it is actually using, so
@@ -298,6 +301,8 @@ the "camera hook" the gate asked for is not needed for it.
       far plane. The user's physical IPD is 67 mm. Eye height and a stronger geometric calibration
       remain to be measured
 - [ ] Hide the player's head and separate gameplay camera control from headset orientation
+- [ ] Use theater mode for menus, intro cinematics and in-game cinematics; switch to immersive
+      stereo only when MouseConCam confirms gameplay
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the
@@ -305,6 +310,10 @@ initial 10-unit test separation. The calibrated profile is 67 mm IPD at 100 game
 (6.7 units), which measured a 5.84 left/right difference; the captured view retained the HUD and
 subtitles in each eye and continued to report 60 FPS. The OpenXR pose backend was then verified to
 load Virtual Desktop, fail cleanly at `xrGetSystem` with no connected HMD, and leave the game running.
+The asymmetric-projection and head-tracking follow-up builds, holds 60 FPS in the training level,
+keeps head tracking off when no runtime pose is valid, and preserves closed-loop absolute aim
+(`yaw=10` settles at 10.0554 degrees and `yaw=0` returns to 0.0). The asymmetric branch itself needs
+a live headset to exercise its runtime tangents.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 
@@ -321,7 +330,8 @@ Gate: positional parallax, stable world scale, unchanged simulation speed in tra
 ### Milestone 4 - training and the first Hong Kong mission
 
 - [ ] Menus, map, inventory and briefings on a controller-operated VR panel
-- [ ] Cutscenes on a virtual screen
+- [ ] Intro, in-game cinematics and menus in theater mode on a virtual screen; gameplay alone
+      enters full stereo
 - [ ] Scopes through a dedicated aiming view
 - [ ] Verify loading, death, restarts, scripted camera changes and mission completion
 - [ ] Package plugin, launcher, configuration, diagnostic logging and removal instructions

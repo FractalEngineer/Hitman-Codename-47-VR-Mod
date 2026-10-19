@@ -22,7 +22,12 @@ using GlProbeInstallFn = bool (*)(const char* filter);
 using GlProbeReportFn = void (*)(unsigned long);
 using GlStereoAvailableFn = bool (*)();
 using GlStereoPerspectiveFn = bool (*)();
-using GlStereoBeginEyeFn = bool (*)(int eye, float eyeOffset);
+// fovRadians is optional and ordered [angleLeft, angleRight, angleUp,
+// angleDown]. When it is present the proxy rebuilds the projection from the
+// runtime frustum and the current perspective near/far planes; when it is null
+// the half-viewport scale used by the desktop prototype remains in effect.
+using GlStereoBeginEyeFn = bool (*)(int eye, float eyeOffset,
+                                   const float* fovRadians);
 using GlStereoEndEyeFn = void (*)();
 
 extern GlProbeInstallFn g_gl_probe_install;
@@ -60,9 +65,10 @@ inline bool GlStereoPerspective() {
     return g_gl_stereo_perspective != nullptr && g_gl_stereo_perspective();
 }
 
-inline bool GlStereoBeginEye(int eye, float eyeOffset) {
+inline bool GlStereoBeginEye(int eye, float eyeOffset,
+                             const float* fovRadians = nullptr) {
     return g_gl_stereo_begin_eye != nullptr &&
-           g_gl_stereo_begin_eye(eye, eyeOffset);
+           g_gl_stereo_begin_eye(eye, eyeOffset, fovRadians);
 }
 
 inline void GlStereoEndEye() {

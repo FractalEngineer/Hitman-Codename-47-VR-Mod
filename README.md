@@ -14,8 +14,10 @@ same commit as the work it describes, so it is always the current picture.
 Milestone 1 (baseline and integration points) is complete. Milestone 2 is in
 progress: the engine camera pose is read back live, absolute look is closed-loop,
 and a 67 mm side-by-side stereo prototype renders both eyes from one gameplay
-update. A gated OpenXR pose backend is integrated for the headset validation
-pass.
+update. A gated OpenXR backend now feeds runtime eye positions, asymmetric FOV
+tangents and predicted head orientation into that path; live headset validation
+and swapchain presentation remain. Menus and cinematics are planned for
+theater mode, with immersive stereo reserved for gameplay.
 
 Milestone 1 established:
 

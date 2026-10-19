@@ -8,7 +8,9 @@
     perspective draw-list passes into left and right half-viewports. Orthographic
     UI and menu passes remain single. Eye separation is in game units; the
     training-level camera offset suggests 100 game units per metre, so the
-    default physical separation is the user's 67 mm IPD.
+    default physical separation is the user's 67 mm IPD. When OpenXR provides
+    valid views, their per-eye FOV tangents replace the desktop half-viewport
+    projection scale.
 
 .PARAMETER IpdMillimeters
     Physical eye separation in millimetres. Defaults to 67.

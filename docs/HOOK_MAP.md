@@ -197,8 +197,8 @@ Two consequences for Milestone 2, both from measurement rather than inference:
   viewports. Orthographic calls remain single. The current fixed-IPD prototype
   scales X projection by 0.5 and shifts eye-space vertices by `+/- IPD/2`.
 - The fixed-function projection is intercepted in the proxy's GL seam. Runtime
-  asymmetric frusta still need to replace the current symmetric half-viewport
-  scaling when OpenXR poses are wired in.
+  views now replace that scale with a per-eye `glFrustum` built from OpenXR's
+  four FOV tangents and the engine's current near/far planes.
 
 `RenderOpenGL.dll` loaded at its preferred base `0x0FB70000` in that run, while
 `HitmanDlc.dlc` relocated. Both cases occur, which is why every address in this

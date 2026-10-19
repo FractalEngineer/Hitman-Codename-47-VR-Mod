@@ -136,6 +136,28 @@ routing, which is what makes focus irrelevant. Verified with the game sitting in
 the background: 15 postings, 0 failures, capture difference 20.2-20.5 against a
 1.8 static control, and an exactly reversed turn returning the frame to 2.4.
 
+The handler also re-centres the cursor with `SetCursorPos` after every move,
+which dragged the real pointer into the game window. The mod hooks
+`user32!SetCursorPos` and swallows only the call whose return address is inside
+that handler (`0x29AC0`..`0x29E50`), so the engine still stores its new position
+and deltas and the desktop pointer is left alone. The swallow counter rises by
+exactly one per posted message; when reading captures, a stray pointer move
+during a test is therefore the user, not the game.
+
+A turn can also be an absolute aim rather than a pixel count:
+
+```powershell
+./tools/look.ps1 -Yaw 90         # 90 degrees from where the driver started
+./tools/look.ps1 -Pitch -10      # ten degrees up
+```
+
+The engine integrates deltas and has no look-at entry point, so the driver keeps
+a dead-reckoned estimate, writes it to `h47vr-lookstate.txt`, and posts the
+difference. `degperpx` (default 0.2) is the calibration knob. This is honest
+dead reckoning, not a read-back of the engine's camera: anything else that turns
+the player - a scripted camera, a cutscene, the real mouse - desyncs it until it
+is recentred.
+
 The windowed path only acts while the renderer holds the cursor (`renderer+299`,
 set by the `ClipCursor` wrapper at RVA `0x2B640`), which happens in gameplay.
 The fullscreen path at the same handler reads its own remembered cursor position

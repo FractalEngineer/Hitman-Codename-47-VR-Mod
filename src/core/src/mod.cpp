@@ -289,6 +289,7 @@ void ApplyReinstall() {
     if (renderer != nullptr) {
         RendererProbeReset();
         RendererProbeInstall();
+        LookDriverRearm();
     }
     if (LoadedModule(L"System.dll") != nullptr) {
         ConsoleDriverRearm();

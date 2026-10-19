@@ -11,6 +11,7 @@
 # Local tool caches and logs
 /tools/_cache/
 /tools/_ghidra_out/
+/tools/_shots/
 /ghidra_project/
 /third_party/openxr-sdk/
 /third_party/minhook-src/

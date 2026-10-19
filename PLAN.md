@@ -131,6 +131,18 @@ Legend: `[x]` done and verified, `[~]` partial or in progress, `[ ]` not started
       foreground. Verified with the game in the background: 15 postings, 0 failures, capture
       difference 20.2-20.5 against a 1.8 static control, and an exactly reversed turn returns the
       frame to 2.4. This supersedes `tools/turn.ps1` for head pose
+- [x] **The turn no longer steals the desktop pointer, and can aim at an absolute pose, 2026-10-19.**
+      The mouse handler re-centres the cursor with `SetCursorPos` after every move, which dragged
+      the real pointer into the game window and onto whatever was underneath it. The mod now hooks
+      `user32!SetCursorPos` and swallows only calls whose caller is inside that handler
+      (`RenderOpenGL` `0x29AC0`..`0x29E50`), so the engine still updates its own state and the
+      desktop pointer is untouched - verified by the swallow counter rising by exactly one per
+      posted message. A request can also name an absolute aim, `yaw=<deg> pitch=<deg>
+      [degperpx=<deg>]`: the engine integrates deltas, so the driver keeps a dead-reckoned
+      estimate in `h47vr-lookstate.txt` and posts the difference. Verified end to end: `yaw=90`
+      changed the frame by 27.20 against a 1.31 control, and both a 200 px and a 450 px reversal
+      returned to 4.2-5.1. What remains is that the estimate is dead reckoning, not a read-back of
+      the engine's camera, so anything else that turns the player desyncs it until recentred
 - [x] The engine's view transform located, 2026-10-19, by elimination rather than by address:
       `glLoadMatrixf` in modelview is identity once per frame, and `glPushMatrix`, `glPopMatrix`,
       `glMultMatrixf`, `glRotatef` and `glScalef` are never called at all. The only matrix the GL

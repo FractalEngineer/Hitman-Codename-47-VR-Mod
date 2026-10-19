@@ -30,6 +30,10 @@ bool LookDriverStart();
 // Called once per presented frame, on the engine's render thread.
 void LookDriverFrame(unsigned long frame);
 
+// Installs the cursor guard if the renderer is loaded. Safe to call repeatedly,
+// and needs calling again after a module reload drops the patch.
+void LookDriverRearm();
+
 // Periodic report for the log heartbeat.
 void LookDriverReport(unsigned long frame);
 

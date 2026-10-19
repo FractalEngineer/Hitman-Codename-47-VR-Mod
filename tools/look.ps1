@@ -25,17 +25,30 @@ DESCRIPTION
 .PARAMETER Steps
     How many frames to spread the turn over. The engine discards a jump.
 
+.PARAMETER Yaw
+    Absolute target yaw in degrees, relative to where the driver's estimate
+    started. Mutually usable with -Pitch; either alone leaves the other where it
+    is.
+
+.PARAMETER DegPerPixel
+    Camera degrees per mouse pixel, for absolute requests. The default is 0.2;
+    calibrate it once against a known quarter turn.
+
 .PARAMETER Verify
     Capture before and after with tools/capture.ps1 and report the difference.
 
 .EXAMPLE
     ./tools/look.ps1 -Dx 220 -Verify
     ./tools/look.ps1 -Dy -120
+    ./tools/look.ps1 -Yaw 90 -Verify
 #>
 [CmdletBinding()]
 param(
     [int]$Dx = 0,
     [int]$Dy = 0,
+    [double]$Yaw,
+    [double]$Pitch,
+    [double]$DegPerPixel,
     [int]$Steps = 15,
     [int]$Rate = 1,
     [string]$GameDir,
@@ -78,7 +91,14 @@ if ($Verify) {
 }
 
 $lookFile = Join-Path $GameDir 'h47vr-look.txt'
-$request = "dx=$Dx dy=$Dy steps=$Steps rate=$Rate"
+$parts = @()
+if ($PSBoundParameters.ContainsKey('Yaw')) { $parts += "yaw=$Yaw" }
+if ($PSBoundParameters.ContainsKey('Pitch')) { $parts += "pitch=$Pitch" }
+if ($PSBoundParameters.ContainsKey('DegPerPixel')) { $parts += "degperpx=$DegPerPixel" }
+if ($parts.Count -eq 0) { $parts += "dx=$Dx"; $parts += "dy=$Dy" }
+$parts += "steps=$Steps"
+$parts += "rate=$Rate"
+$request = $parts -join ' '
 Set-Content -LiteralPath $lookFile -Value $request -Encoding ascii
 Write-Host ("request written: {0} -> '{1}'" -f $lookFile, $request)
 
@@ -104,6 +124,11 @@ if ($log) {
         Write-Host ("--- {0}, look driver lines ---" -f $log.Name)
         $lines | Select-Object -Last 6 | ForEach-Object { Write-Host ("  {0}" -f $_.TrimEnd()) }
     }
+}
+
+$stateFile = Join-Path $GameDir 'h47vr-lookstate.txt'
+if (Test-Path -LiteralPath $stateFile) {
+    Write-Host ("  aim estimate: {0}" -f (Get-Content -LiteralPath $stateFile -Raw).Trim())
 }
 
 if ($Verify) {

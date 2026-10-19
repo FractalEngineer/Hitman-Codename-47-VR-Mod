@@ -31,8 +31,8 @@ DESCRIPTION
     is.
 
 .PARAMETER DegPerPixel
-    Camera degrees per mouse pixel, for absolute requests. The default is 0.2;
-    calibrate it once against a known quarter turn.
+    Camera degrees per mouse pixel, for absolute requests. The default is 0.1,
+    measured against a known quarter turn in the training level.
 
 .PARAMETER Verify
     Capture before and after with tools/capture.ps1 and report the difference.

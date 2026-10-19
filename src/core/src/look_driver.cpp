@@ -44,10 +44,16 @@ bool g_reported_window = false;
 // long as nothing else turns the player - which is exactly the case once the
 // headset owns the mouse. It is what lets a head pose be an absolute target
 // instead of a stream of relative nudges.
-double g_yaw_deg = 0.0;
-double g_pitch_deg = 0.0;
-double g_deg_per_px = 0.2;
-double g_turn_deg_per_px = 0.2;
+// The engine integrates the deltas itself, so the pixel total *is* the aim state.
+// Degrees are derived from it, which means recalibrating does not invalidate a
+// recentre: yaw=0 still posts exactly the pixels needed to undo the total.
+double g_px_x = 0.0;
+double g_px_y = 0.0;
+// Measured 2026-10-19 in the training level: 450 posted pixels read as about 45
+// degrees, so the scale is ~0.1 deg/px. The first build assumed 0.2 and turned
+// half as far as asked.
+double g_deg_per_px = 0.1;
+double g_turn_deg_per_px = 0.1;
 
 // Rounds to nearest instead of truncating, so a turn split over N frames lands
 // on the requested pixel count exactly even when the split is not whole
@@ -134,8 +140,8 @@ void WriteState() {
     if (!file) {
         return;
     }
-    file << "yaw=" << g_yaw_deg << " pitch=" << g_pitch_deg
-         << " degperpx=" << g_deg_per_px << "\n";
+    file << "yaw=" << g_px_x * g_deg_per_px << " pitch=" << g_px_y * g_deg_per_px
+         << " degperpx=" << g_deg_per_px << " px=" << g_px_x << "," << g_px_y << "\n";
 }
 
 // The engine's mouse handler re-centres the cursor with SetCursorPos after every
@@ -223,13 +229,17 @@ void PollRequest(unsigned long frame) {
     // engine has no absolute look-at entry point we can call, but it does
     // integrate deltas - so the target minus our own estimate is the delta.
     if (request.has_yaw || request.has_pitch) {
-        const double targetYaw = request.has_yaw ? request.yaw : g_yaw_deg;
-        const double targetPitch = request.has_pitch ? request.pitch : g_pitch_deg;
-        g_dx = static_cast<int>((targetYaw - g_yaw_deg) / g_turn_deg_per_px);
-        g_dy = static_cast<int>((targetPitch - g_pitch_deg) / g_turn_deg_per_px);
+        const double currentYaw = g_px_x * g_turn_deg_per_px;
+        const double currentPitch = g_px_y * g_turn_deg_per_px;
+        const double targetYaw = request.has_yaw ? request.yaw : currentYaw;
+        const double targetPitch = request.has_pitch ? request.pitch : currentPitch;
+        const double deltaX = targetYaw / g_turn_deg_per_px - g_px_x;
+        const double deltaY = targetPitch / g_turn_deg_per_px - g_px_y;
+        g_dx = static_cast<int>(deltaX < 0 ? deltaX - 0.5 : deltaX + 0.5);
+        g_dy = static_cast<int>(deltaY < 0 ? deltaY - 0.5 : deltaY + 0.5);
         H47VR_LOG_INFO("look driver: target yaw=%.2f pitch=%.2f deg (from yaw=%.2f "
                        "pitch=%.2f, %.4f deg/px) -> dx=%d dy=%d",
-                       targetYaw, targetPitch, g_yaw_deg, g_pitch_deg,
+                       targetYaw, targetPitch, currentYaw, currentPitch,
                        g_turn_deg_per_px, g_dx, g_dy);
         if (g_dx == 0 && g_dy == 0) {
             H47VR_LOG_INFO("look driver: already at the requested aim");
@@ -306,15 +316,16 @@ void LookDriverFrame(unsigned long frame) {
         g_wait = g_rate - 1;
 
         if (g_steps_done == g_steps_total) {
-            g_yaw_deg += g_dx * g_turn_deg_per_px;
-            g_pitch_deg += g_dy * g_turn_deg_per_px;
+            g_px_x += g_dx;
+            g_px_y += g_dy;
             g_deg_per_px = g_turn_deg_per_px;
             WriteState();
             ++g_turns;
             H47VR_LOG_INFO("look driver: turn complete (dx=%d dy=%d, %d message(s), "
                            "%lu posted so far, %lu failed, now yaw=%.2f pitch=%.2f, frame %lu)",
                            g_dx, g_dy, g_steps_total, g_messages.load(),
-                           g_post_failures.load(), g_yaw_deg, g_pitch_deg, frame);
+                           g_post_failures.load(), g_px_x * g_deg_per_px,
+                           g_px_y * g_deg_per_px, frame);
         }
         return;
     }

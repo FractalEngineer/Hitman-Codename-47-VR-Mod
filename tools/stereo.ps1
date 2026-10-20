@@ -20,6 +20,11 @@
 .PARAMETER GameUnitsPerMetre
     World-space scale. Defaults to 100, based on the 150-unit follow camera.
 
+.PARAMETER FovMarginDegrees
+    Extra engine visibility headroom on each side of the OpenXR eye union.
+    Defaults to 0 degrees. This widens culling only; the final per-eye
+    projection remains the runtime-supplied FOV.
+
 .PARAMETER Ipd
     Legacy override in raw game units. Use only for calibration experiments.
 
@@ -30,6 +35,7 @@
 param(
     [double]$IpdMillimeters = 67.0,
     [double]$GameUnitsPerMetre = 100.0,
+    [double]$FovMarginDegrees = 0.0,
     [double]$Ipd,
     [switch]$Off,
     [string]$GameDir
@@ -68,11 +74,15 @@ if ($Off) {
 if ($IpdMillimeters -le 0 -or $IpdMillimeters -gt 1000) {
     throw 'IpdMillimeters must be between 0 and 1000.'
 }
+if ($FovMarginDegrees -lt 0 -or $FovMarginDegrees -gt 30) {
+    throw 'FovMarginDegrees must be between 0 and 30.'
+}
 
 $request = if ($PSBoundParameters.ContainsKey('Ipd')) {
     "ipd={0}" -f $Ipd
 } else {
-    "ipd_mm={0} units_per_m={1}" -f $IpdMillimeters, $GameUnitsPerMetre
+    "ipd_mm={0} units_per_m={1} fov_margin_deg={2}" -f `
+        $IpdMillimeters, $GameUnitsPerMetre, $FovMarginDegrees
 }
 Set-Content -LiteralPath $control -Value $request -Encoding ascii
 Write-Host ("stereo on: {0}" -f $control)

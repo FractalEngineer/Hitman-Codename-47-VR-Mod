@@ -146,7 +146,17 @@ a deliberate test.
   camera, not the downstream polygon clipper: `HitmanDlc.dlc` RVA `0x92040`
   rebuilds the camera's visibility state from its first FOV argument. The
   renderer publishes the symmetric horizontal FOV covering both OpenXR eye
-  frusta, including per-eye translation at the near plane.
+  frusta, including per-eye translation at the near plane. The submitted
+  per-eye projection remains the runtime FOV.
+- A 6-degree-per-side visibility-margin experiment widened the engine culling
+  camera further but produced no visible improvement in the physical headset.
+  Its default is back at zero, restoring the last good engine-FOV behavior.
+  The remaining edge band needs a different cause than a symmetric FOV shortfall.
+- The legacy renderer emits display-encoded color. XR presentation therefore
+  prefers `GL_SRGB8_ALPHA8`; `GL_RGBA8` is a fallback for runtimes that do not
+  offer it. Under VirtualDesktopXR the sRGB swapchain was accepted at
+  `0x8C43`, avoiding the brightness lift produced when display-encoded values
+  were interpreted as linear.
 - The null-HMD run proves native per-eye rendering and layer submission. The
   acquired 1512x1680 images have 24-bit depth attachments and receive the
   face-list replay directly. A centre readback measured mean luminance
@@ -154,9 +164,12 @@ a deliberate test.
   blit remains as the fallback path.
 - A physical Virtual Desktop/Quest session exercised the headset path: runtime
   eye positions, asymmetric FOV, tracking and theater placement were observed.
-  The wide-visibility path has been verified on the desktop and under SteamVR's
-  null HMD. The remaining check is visual confirmation in the physical Quest:
-  peripheral culling, convergence and lens comfort.
+The wide-visibility path has been verified on the desktop and under SteamVR's
+null HMD. A physical Quest pass found the corrected path practically usable but
+with a residual edge band. Extra symmetric FOV did not change that band. sRGB
+brightness parity has been confirmed. A faithful desktop mirror of the submitted
+XR eye image is the next debugging requirement; it should use the same projection,
+visibility, and color path rather than the current generic 800x600 window output.
 
 ## Presentation path
 

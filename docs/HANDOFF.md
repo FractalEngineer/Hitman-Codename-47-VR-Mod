@@ -122,17 +122,19 @@ the eye midpoint and rotates the relative vector into head-local space. Across
 a range of head yaw and pitch, the rendered offsets stayed at
 `-0.0332 / +0.0332 m` on the user's 67 mm IPD.
 
-The physical pass also produced these verified fixes:
+The physical pass also produced these changes:
 
 - MouseConCam's four sway/bob oscillators are zeroed while first-person mode is
   active, removing most random camera shake.
-- MouseConCam yaw remains the engine-facing turn path. The head yaw correction
-  cap was raised from 18 to 96 pixels per frame and the deadband reduced to
-  0.15 degrees; the user reported the fast-motion lag fixed.
+- MouseConCam yaw is still fed by synthesized `WM_MOUSEMOVE`. The correction cap
+  is 96 pixels per frame with a 0.15-degree deadband, and the user reported the
+  fast-motion lag fixed. This is explicitly a temporary mechanism: the user
+  dislikes it, and cursor-coordinate assumptions keep making vertical aim fragile.
 - Headset pitch no longer goes through MouseConCam. Feeding pitch through mouse
   deltas moved the close follow-camera pivot downward and caused a slow sink
-  through the floor. Pitch is now applied to the stereo vertices at the GL seam;
-  the user confirmed the sink was resolved.
+  through the floor. Pitch is applied to the stereo vertices at the GL seam.
+  A later gameplay state still reported `MouseConCam pitch=89.0000`, so the mouse
+  route is not considered stable even though it posts `dy=0`.
 - Head roll is applied at the same vertex seam, around the eye forward axis. The
   first sign was reversed; it was flipped for the final build, but the user
   stopped headset testing before confirming that last change.
@@ -140,8 +142,9 @@ The physical pass also produced these verified fixes:
   position and orientation, instead of a hard-coded 1.5 m world height. The user
   confirmed the theater height and rendering fix.
 
-**Peripheral culling fixed, 2026-10-20.** The real path is the engine camera's
-own projection/clipping state, not the downstream polygon clipper. The live
+**Peripheral culling is improved but still open, 2026-10-20.** The real path is
+the engine camera's own projection/clipping state, not the downstream polygon
+clipper. The live
 gameplay camera object stores a 45-degree horizontal FOV at `+0x16E`;
 `FUN_0fd52040` (`HitmanDlc.dlc` RVA `0x92040`) consumes that value and rebuilds
 the camera's visibility state. The old `widefov.ps1` only changed the final GL
@@ -161,6 +164,27 @@ The implementation now:
 - keeps `h47vr-widefov.txt` as the desktop diagnostic and leaves the ruled-out
   `0x93670` clipper bypass off.
 
+The first physical Quest pass through this engine-FOV path was the last good
+culling result: the user described it as way less culling and practically
+usable, while noting that some edge geometry remained. That behavior is the
+`b4c792c` baseline plus the mouse-coordinate fix that was present for the run.
+
+A later experiment added `fov_margin_deg=6` per side in angular space before
+publishing the engine visibility FOV, leaving the actual per-eye OpenXR
+projection untouched. On the Quest run whose physiological union was 132.79
+degrees, the engine accepted 144.79 degrees, but the user reported no visible
+improvement. The margin default is therefore back at zero. Do not assume the
+remaining edge band is a symmetric-FOV shortfall; it needs an honest XR-image
+mirror on the desktop and then a fresh investigation of per-geometry visibility.
+
+The XR presentation swapchain now prefers `GL_SRGB8_ALPHA8` (`0x8C43`) and
+falls back to `GL_RGBA8`. The old renderer emits display-encoded values, so an
+RGBA8 XR texture treated those values as linear and made the headset noticeably
+brighter than the desktop. VirtualDesktopXR accepted the sRGB format for both
+eye swapchains; physical brightness parity was awaiting the next headset check
+when it was first implemented. The subsequent physical run confirmed that the
+colors are fixed.
+
 The per-geometry `+0x398` trace is also available behind `h47vr-camobj.txt`.
 Live capture resolved its target to `HitmanDlc.dlc` RVA `0x95AE0` and showed the
 stable scene pointer is not the per-geometry vtable. This trace is diagnostic;
@@ -176,6 +200,15 @@ Verified:
   game remained responsive.
 - Direct eye-image readback was non-black: mean luminance `0.1892/0.1793` and
   left/right difference `0.0399`.
+- A physical Quest pass reported the culling fix as a major improvement and
+  practically usable. A later 6-degree-per-side FOV-margin build was accepted by
+  the engine but showed no visual improvement, so the margin is disabled.
+- The user confirmed that `GL_SRGB8_ALPHA8` fixed the headset being much brighter
+  than flat mode.
+- Mouse-message head yaw remains a defect: a later gameplay state file again
+  showed `MouseConCam pitch=89.0000`. Even though the head-pose code posts `dy=0`,
+  the synthesized cursor path is still capable of corrupting vertical aim. Treat
+  the current mouse route as temporary, not the native head-control design.
 
 Do not call `FUN_0fd52040` out of band from the frame/GL callback. A live test
 that did so crashed immediately after the first direct stereo frame. Let the
@@ -419,12 +452,12 @@ Control files next to the game (all optional, delete to disable):
 | --- | --- |
 | `h47vr-look.txt` | `dx=<px> dy=<px> [steps=<n>] [rate=<frames>]` - turn the engine's **own** camera by posting `WM_MOUSEMOVE`; no focus needed. Consumed on sight, so one write is one turn (`tools/look.ps1`) |
 | `h47vr-camread.txt` | live MouseConCam pose: `yaw`, engine `pitch` (elevation, positive up), the player-relative offset, camera pointer, epoch and update count |
-| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale>` sets physical eye separation (`tools/stereo.ps1`) |
+| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale> [fov_margin_deg=<degrees>]` sets eye separation and optional engine-culling headroom (margin defaults to 0; `tools/stereo.ps1`) |
 | `h47vr-openxr.txt` | while present, initialize OpenXR on the game's WGL context and use predicted eye X positions when available (`tools/openxr.ps1`) |
 | `h47vr-openxr-runtime.txt` | optional process-local `XR_RUNTIME_JSON` path for testing another runtime without changing the machine registry |
 | `h47vr-widefov.txt` | `fov_deg=<degrees> [clip=0]` - diagnostic wide desktop projection; `clip=0` isolates the projection from the unproven polygon-clipper experiment (`tools/widefov.ps1 -NoClipBypass`) |
 | `h47vr-firstperson.txt` | `distance=<game units>` - replace MouseConCam's 150/100-unit follow targets so the engine places the gameplay camera in the head (`tools/firstperson.ps1`) |
-| `h47vr-stereo-state.txt` | published state: `mode=off\|theater\|stereo`, `gameplay=0\|1`, eye separation and both pass counters |
+| `h47vr-stereo-state.txt` | published state: `mode=off\|theater\|stereo`, `gameplay=0\|1`, eye separation, culling margin and both pass counters |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
 | `h47vr-glprobe.txt` | comma list of GL exports to intercept, or `all` / `none` |
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
@@ -861,32 +894,40 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 ## Immediate next steps
 
 Milestone 2 continues here. Native OpenXR eye rendering, physical 67 mm IPD,
-head tracking, theater placement and runtime eye-union culling are working. The
-remaining work is physical visual validation and first-person polish.
+theater placement and sRGB color are working. Head tracking is functional but
+the mouse-message implementation must be replaced. Peripheral culling is
+improved but still leaves an edge band. Headset testing is paused.
 
-1. **Re-test the culling fix in the physical headset.** Run with the OpenXR gate
-   present before level setup, then confirm the corridor walls fill the
-   peripheral view in both eyes. The null-HMD run verified the union FOV reaches
-   the engine and direct stereo remains alive; lens-level confirmation is still
-   required.
-2. **Confirm head roll direction.** The final build flips the roll sign so the
-   scene rotates opposite the headset roll. This has not been tested since the
-   last sign change. Confirm left and right tilt, then adjust only the sign in
-   `stereo_renderer.cpp` if needed.
-3. **Finish the physical visual pass.** Confirm lens-correct convergence,
-   comfort, sharpness and HUD/UI coverage. The native path currently captures
-   perspective face lists; orthographic gameplay UI may still need an explicit
-   per-eye overlay.
-4. **Finish first person.** Hide the player's head while keeping the body for
-   shadows/reflections, calibrate eye height and near clipping, and validate that
-   the direct pitch/roll path stays stable through crouching, leaning and scripted
-   camera changes.
-5. **Calibrate game units.** The working scale is 100 units/metre with the user's
+1. **Restore the last good culling state.** The user marked the build immediately
+   before the sRGB/margin experiment as "way less culling" and "practically
+   usable." Keep the sRGB color fix, but preserve the raw runtime eye-union FOV
+   behavior from `b4c792c`; the 6-degree margin default is already back at zero.
+   Do not call culling fixed until the user confirms parity with that run.
+2. **Replace mouse-message head yaw with a native engine orientation path.** The
+   user explicitly dislikes synthesized `WM_MOUSEMOVE`. It has repeatedly driven
+   MouseConCam elevation to 89 degrees and depends on cursor/client/render
+   coordinates. Start from `_ZCAMERA_MainCameraControl`, `MouseConCam` update RVA
+   `0x26F20`, and the camera-selection list; identify the gameplay yaw field or
+   native callback that actually rotates the engine camera and feed OpenXR yaw
+   there. Keep translation, collision and visibility inside the engine.
+3. **Make the desktop window mirror the submitted XR eye image.** The 800x600
+   game window is not a faithful headset view. Add a debug presentation mode
+   that copies the completed left/right OpenXR swapchain images to the game
+   window as selectable left-eye or side-by-side, preserving the exact runtime
+   projection, culling state and sRGB format. This is the gate for further
+   headless culling work; the user does not want repeated headset sessions for
+   every probe.
+4. **Add minimal OpenXR controller input.** Before fuller Milestone 3 work,
+   implement left-stick smooth locomotion, right-stick smooth/snap turn, a
+   controller button mapped to ESC for cinematics, and stick-to-arrow mapping in
+   menus. The goal is to enter a level and traverse the front end without removing
+   the headset, while retaining keyboard/mouse fallback.
+5. **Then resume first-person polish.** Hide the player's head while retaining
+   the body for shadows/reflections, calibrate eye height and near clipping, and
+   validate pitch/roll through crouching, leaning and scripted camera changes.
+6. **Calibrate game units.** The working scale is 100 units/metre with the user's
    67 mm IPD. Validate it against physical level landmarks before tuning movement
    or eye height.
-6. **Keep theater mode covered.** The head-relative quad is correct on the
-   physical headset; verify text readability and transitions through menus,
-   intro cinematics and in-game cutscenes after the culling work.
 7. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so
    the world path is the immediate-mode `0x3680` face-list consumer. Confirm its
    state restoration and transparent-pass ordering under heavier scenes, then

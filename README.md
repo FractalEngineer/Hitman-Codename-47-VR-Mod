@@ -18,12 +18,16 @@ update. A gated OpenXR backend now feeds runtime eye positions, asymmetric FOV
 tangents and predicted head orientation into that path. Gameplay now renders
 directly into depth-complete OpenXR eye swapchains under the SteamVR null HMD;
 physical Quest testing has validated the 67 mm IPD, head tracking and theater
-placement. Peripheral culling is addressed at the engine camera: the runtime
-eye union is passed into the engine's own projection/visibility builder before
-gameplay, keeping the face list, clipping and final stereo projection coherent.
-Desktop 122-degree rendering now fills the corridor walls, and a SteamVR
-null-HMD run widened the culling camera from 67.4 to 116.94 degrees while direct
-stereo stayed non-black and responsive. A physical-headset visual retest remains.
+placement. The runtime eye union is passed into the engine's own
+projection/visibility builder before gameplay, keeping the face list, clipping
+and final stereo projection coherent. That path was the user's "practically
+usable" milestone, but it still leaves an edge-culling band; an additional
+6-degree symmetric FOV margin produced no visible improvement and is disabled.
+The successful physical-headset color fix uses an sRGB OpenXR swapchain so the
+legacy display-encoded game image no longer appears brighter than flat mode.
+The current priorities are a native head-orientation path instead of synthesized
+`WM_MOUSEMOVE`, a desktop mirror of the actual XR eye image for headless
+debugging, and minimal controller locomotion/menu input.
 Menus and cinematics use theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head hiding and final eye-height calibration

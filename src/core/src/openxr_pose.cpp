@@ -59,6 +59,7 @@ constexpr GLenum kGlColorAttachment0 = 0x8CE0;
 constexpr GLenum kGlDepthAttachment = 0x8D00;
 constexpr GLenum kGlFramebufferComplete = 0x8CD5;
 constexpr GLenum kGlTexture2d = 0x0DE1;
+constexpr GLenum kGlSrgb8Alpha8 = 0x8C43;
 constexpr GLenum kGlRgba8 = 0x8058;
 constexpr GLenum kGlDepthComponent24 = 0x81A6;
 constexpr GLenum kGlScissorTest = 0x0C11;
@@ -519,11 +520,23 @@ bool CreatePresentationSwapchains() {
     if (XR_FAILED(result)) {
         return false;
     }
+    // The game renders legacy display-encoded color. An sRGB XR swapchain
+    // preserves those values when the compositor samples and presents them;
+    // an RGBA8 swapchain treats them as linear and noticeably brightens the
+    // image in the headset.
     g_swapchain_format = static_cast<GLenum>(formats.front());
     for (int64_t format : formats) {
-        if (format == static_cast<int64_t>(kGlRgba8)) {
-            g_swapchain_format = kGlRgba8;
+        if (format == static_cast<int64_t>(kGlSrgb8Alpha8)) {
+            g_swapchain_format = kGlSrgb8Alpha8;
             break;
+        }
+    }
+    if (g_swapchain_format != kGlSrgb8Alpha8) {
+        for (int64_t format : formats) {
+            if (format == static_cast<int64_t>(kGlRgba8)) {
+                g_swapchain_format = kGlRgba8;
+                break;
+            }
         }
     }
 

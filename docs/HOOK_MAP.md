@@ -2,8 +2,10 @@
 
 The Milestone 1 deliverable. Status as of 2026-10-20: loading, keyboard-free
 level entry, MouseConCam readback, stereo replay and the OpenXR camera/visibility
-path are implemented and live-verified. The tables below retain the resolution
-and verification method for each address.
+path are implemented and live-verified. Physical testing confirmed sRGB color,
+but a residual edge-culling band remains and cannot be removed by widening the
+symmetric engine FOV further. The tables below retain the resolution and
+verification method for each address.
 
 This file is the single place where hook addresses and signatures are recorded.
 Nothing may be hooked from an address that is not listed here with its
@@ -208,6 +210,12 @@ Two consequences for Milestone 2, both from measurement rather than inference:
   horizontal FOV covering the union of both OpenXR eye frusta while gameplay is
   active. This keeps the renderer projection, face-list rejection and clipping
   in one engine-owned camera state.
+- That engine-FOV substitution accepted the runtime union in the physical
+  headset and produced the last good culling result. An extra 6-degree-per-side
+  margin was accepted too but did not change the visible residual edge; its
+  default is disabled. Future culling work should first reproduce the XR eye
+  image on the desktop, then inspect per-geometry visibility for the remaining
+  band rather than continuing to widen one symmetric angle.
 - The geometry `+0x398` path called by `CamUpdate` resolves to
   `HitmanDlc.dlc` RVA `0x95AE0`; its post-call probe is gated by
   `h47vr-camobj.txt`. Forcing the shared bounds predicate at `0xA1B60` did not

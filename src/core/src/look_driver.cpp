@@ -278,6 +278,35 @@ BOOL WINAPI HookSetCursorPos(int x, int y) {
 // Posts one mouse-move at the client-area centre plus the step. The engine
 // subtracts that centre itself, so the message carries an absolute position
 // whose offset from the centre is the delta it should see.
+bool EngineRenderSize(int* width, int* height) {
+    void* slot = ResolveSymbol(
+        L"Globals.dll", "?g_pSysInterface@@3PAVZSysInterface@@A");
+    if (slot == nullptr) {
+        return false;
+    }
+    auto* sysInterface = *reinterpret_cast<unsigned char**>(slot);
+    if (sysInterface == nullptr) {
+        return false;
+    }
+    const int renderWidth =
+        *reinterpret_cast<int*>(sysInterface + 0x19);
+    const int renderHeight =
+        *reinterpret_cast<int*>(sysInterface + 0x1D);
+    if (renderWidth <= 0 || renderHeight <= 0 ||
+        renderWidth > 0x3FFF || renderHeight > 0x3FFF) {
+        return false;
+    }
+    if (width != nullptr) {
+        *width = renderWidth;
+    }
+    if (height != nullptr) {
+        *height = renderHeight;
+    }
+    return true;
+}
+
+bool g_input_geometry_reported = false;
+
 void PostStep(int stepX, int stepY) {
     HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
     if (window == nullptr) {
@@ -290,8 +319,21 @@ void PostStep(int stepX, int stepY) {
         ++g_post_failures;
         return;
     }
-    const int centreX = (client.right - client.left) / 2;
-    const int centreY = (client.bottom - client.top) / 2;
+    int centreX = (client.right - client.left) / 2;
+    int centreY = (client.bottom - client.top) / 2;
+    int renderWidth = 0;
+    int renderHeight = 0;
+    if (EngineRenderSize(&renderWidth, &renderHeight)) {
+        centreX = renderWidth / 2;
+        centreY = renderHeight / 2;
+    }
+    if (!g_input_geometry_reported) {
+        g_input_geometry_reported = true;
+        H47VR_LOG_INFO("look driver: mouse coordinates client=%dx%d "
+                       "render=%dx%d, centre=%d,%d",
+                       client.right - client.left, client.bottom - client.top,
+                       renderWidth, renderHeight, centreX, centreY);
+    }
     const int x = centreX + stepX;
     const int y = centreY + stepY;
 

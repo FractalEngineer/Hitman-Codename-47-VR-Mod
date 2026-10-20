@@ -322,6 +322,18 @@ the "camera hook" the gate asked for is not needed for it.
       `67.40 -> 116.94`, 1,646 stereo pairs completed by frame 2400, direct readback was non-black
       (`0.1892/0.1793` mean, `0.0399` left/right difference), and the process stayed responsive.
       Physical-headset visual confirmation remains with the other Quest checks
+- [x] **Correct XR color encoding, 2026-10-20.** OpenXR presentation now prefers
+      `GL_SRGB8_ALPHA8` (`0x8C43`) over `GL_RGBA8` because the legacy renderer emits
+      display-encoded color and RGBA8 made the headset noticeably brighter. VirtualDesktopXR
+      accepted sRGB for both eye swapchains; the user confirmed that headset colors now match flat
+      mode
+- [~] **Culling remains open despite the engine-FOV fix, 2026-10-20.** The physical pass
+      immediately before the color work was reported as a major improvement and practically usable.
+      Adding `fov_margin_deg=6` per side raised the engine culling camera from the physiological
+      union to 144.79 degrees, but the user reported no visible improvement over the prior run.
+      The margin default is restored to zero to match the last good engine-FOV behavior at
+      `b4c792c`; the sRGB color fix is retained. The residual edge geometry therefore needs a
+      different explanation than symmetric FOV shortfall
 - [x] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon
       events: only the face-list draw consumer is replayed. The training capture remained at
       60 FPS and the gameplay frame count advanced at the normal cadence
@@ -338,8 +350,10 @@ the "camera hook" the gate asked for is not needed for it.
       (the sway noise floor). MouseConCam's four sway/bob oscillators are zeroed while first person
       is active, which removed the random camera shake. Engine pitch is no longer driven by the
       headset because it moved the pivot below the player and caused a slow floor sink; headset
-      pitch and roll now render at the GL seam. The close camera now has the wide-visibility path
-      above; the remaining first-person work is head hiding, eye height and near-plane calibration
+      pitch and roll now render at the GL seam. Mouse-message yaw remains temporary and unstable:
+      a later gameplay readback again reached MouseConCam elevation 89 degrees. The close camera now
+      has the engine-FOV visibility path above; the remaining first-person work is a native head
+      orientation route, head hiding, eye height and near-plane calibration
 - [~] Hide the player's head and fully separate gameplay camera position from headset orientation.
       The camera can now sit in the head, but head/body hiding, eye-height calibration and the
       final camera/head split remain
@@ -352,6 +366,22 @@ the "camera hook" the gate asked for is not needed for it.
       60 FPS. The headset path now submits that theater image as a head-relative quad at eye
       height and gameplay as two projection views. Physical testing confirmed the corrected
       placement and rendering; the previous hard-coded 1.5 m height was too high
+- [ ] **Replace mouse-message head yaw with a native engine camera/player-orientation path.**
+      The current `WM_MOUSEMOVE` route is the wrong long-term abstraction. It requires cursor-space
+      assumptions, has repeatedly driven MouseConCam elevation to its limit, and the user explicitly
+      wants it replaced. Locate the gameplay-facing yaw/orientation update used by MouseConCam and
+      the camera-control list, then drive that from OpenXR head pose without synthesizing pointer
+      input
+- [ ] **Make the desktop window mirror the actual headset eye image.** The current 800x600 desktop
+      output is not a faithful XR debug view. Add a diagnostic presentation mode that reads the
+      completed OpenXR eye images and draws them to the game window with a selectable
+      left/right or side-by-side layout, so null-HMD/headless iteration uses the same projection,
+      culling and color path as the headset
+- [ ] **Add minimal OpenXR controller input before broader Milestone 3 work.** Provide smooth
+      locomotion and smooth/snap turning on sticks, a controller ESC action for cinematics, and
+      stick-to-arrow mapping for menus so level entry and menu traversal can happen entirely in the
+      headset. Route these through the existing engine input state and preserve keyboard/mouse
+      fallback
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the

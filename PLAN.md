@@ -327,7 +327,7 @@ the "camera hook" the gate asked for is not needed for it.
       display-encoded color and RGBA8 made the headset noticeably brighter. VirtualDesktopXR
       accepted sRGB for both eye swapchains; the user confirmed that headset colors now match flat
       mode
-- [~] **Culling remains open despite the engine-FOV fix, 2026-10-20.** The physical pass
+- [x] **Pitch-dependent culling fixed, 2026-10-21.** The physical pass
       immediately before the color work was reported as a major improvement and practically usable.
       Adding `fov_margin_deg=6` per side raised the engine culling camera from the physiological
       union to 144.79 degrees, but the user reported no visible improvement over the prior run.
@@ -336,9 +336,9 @@ the "camera hook" the gate asked for is not needed for it.
       mirrored-image test compared straight-ahead and pitched views: straight ahead was coherent,
       but a 45-degree upward engine pitch lost the entire lower half of the submitted image. The
       remaining problem is therefore orientation-dependent visibility, not symmetric horizontal FOV.
-      A diagnostic native-pitch feed then produced coherent upward and downward mirrored views with
-      no half-frame loss. It remains opt-in until sustained movement, crouch and floor-sink behavior
-      are validated
+      The native-pitch feed then produced coherent upward and downward mirrored views with no
+      half-frame loss, and the user confirmed in the live Quest session that the culling is gone.
+      Native pitch is enabled for the current test profile
 - [x] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon
       events: only the face-list draw consumer is replayed. The training capture remained at
       60 FPS and the gameplay frame count advanced at the normal cadence
@@ -383,12 +383,20 @@ the "camera hook" the gate asked for is not needed for it.
       images to the default framebuffer before `SwapBuffers`, using the same runtime projection,
       visibility state and sRGB format. Null-HMD validation measured a non-black mirrored desktop
       image and added a BMP capture path for visual comparisons
-- [~] **Minimal OpenXR controller input, 2026-10-20.** OpenXR actions bind left-stick movement,
-      right-stick smooth turn, right-stick-click snap turn, and A/B-as-ESC for Oculus Touch, Index
-      and Microsoft controllers. Movement/menu directions feed the engine's native per-key state;
-      menus map the sticks to arrow keys. Controller ESC posts a held `WM_KEYDOWN`/`WM_KEYUP`
-      pair, verified to change gameplay to theater mode. Physical controller travel, snap direction
-      and full menu traversal still need a live controller check
+- [~] **Minimal OpenXR controller input, 2026-10-21.** Live Quest testing corrected the stick axis
+      signs and raised smooth turning to 180 degrees/second. The left menu button now sends ESC,
+      with a four-second startup guard so a button held while the session starts cannot close the
+      intro. A/B/X/Y map to interact/select, reload/back, weapon mode and status; both triggers fire,
+      left stick click runs, right grip sneaks, and left grip drops the held item. Right-stick click
+      now snaps only when the stick is deflected left or right. Menus use stick-to-arrow messages
+      plus A to select and B to go back. Camera height and random tracking jerks remain open
+- [~] **Live headset integration pass, 2026-10-21.** The user confirmed that native engine pitch
+      removes the previous culling loss. VirtualDesktopXR is presenting direct 2412x2596 sRGB eye
+      images with the 67 mm profile. A provisional `units_per_m=110` reduces the perceived world
+      size by 10%. Live `headtarget`/camera diagnostics measured yaw agreement within about 0.07
+      degrees at a sampled hold. The camera is still roughly one head too high relative to 47, and
+      occasional tracking jerks remain. The 0.35-degree native pitch deadband reduces small pitch
+      corrections but does not yet prove the jerk source is gone
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the

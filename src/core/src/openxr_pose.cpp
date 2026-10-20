@@ -50,6 +50,14 @@ XrAction g_move_action = XR_NULL_HANDLE;
 XrAction g_turn_action = XR_NULL_HANDLE;
 XrAction g_escape_action = XR_NULL_HANDLE;
 XrAction g_snap_action = XR_NULL_HANDLE;
+XrAction g_interact_action = XR_NULL_HANDLE;
+XrAction g_reload_action = XR_NULL_HANDLE;
+XrAction g_sneak_action = XR_NULL_HANDLE;
+XrAction g_weapon_action = XR_NULL_HANDLE;
+XrAction g_status_action = XR_NULL_HANDLE;
+XrAction g_fire_action = XR_NULL_HANDLE;
+XrAction g_run_action = XR_NULL_HANDLE;
+XrAction g_drop_action = XR_NULL_HANDLE;
 bool g_actions_ready = false;
 bool g_action_sync_warned = false;
 
@@ -236,7 +244,23 @@ bool CreateInputActions() {
         !createAction("escape", "Skip cinematic or back",
                       XR_ACTION_TYPE_BOOLEAN_INPUT, &g_escape_action) ||
         !createAction("snap", "Snap turn", XR_ACTION_TYPE_BOOLEAN_INPUT,
-                      &g_snap_action)) {
+                      &g_snap_action) ||
+        !createAction("interact", "Interact", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                      &g_interact_action) ||
+        !createAction("reload", "Reload", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                      &g_reload_action) ||
+        !createAction("weapon", "Weapon mode", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                      &g_weapon_action) ||
+        !createAction("status", "Status", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                      &g_status_action) ||
+        !createAction("run", "Run", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                      &g_run_action) ||
+        !createAction("fire", "Fire", XR_ACTION_TYPE_FLOAT_INPUT,
+                      &g_fire_action) ||
+        !createAction("sneak", "Sneak", XR_ACTION_TYPE_FLOAT_INPUT,
+                      &g_sneak_action) ||
+        !createAction("drop", "Drop item", XR_ACTION_TYPE_FLOAT_INPUT,
+                      &g_drop_action)) {
         H47VR_LOG_WARN("openxr: could not create controller actions");
         return false;
     }
@@ -244,22 +268,42 @@ bool CreateInputActions() {
     const std::vector<std::pair<XrAction, const char*>> oculus = {
         {g_move_action, "/user/hand/left/input/thumbstick"},
         {g_turn_action, "/user/hand/right/input/thumbstick"},
-        {g_escape_action, "/user/hand/right/input/a/click"},
-        {g_escape_action, "/user/hand/right/input/b/click"},
+        {g_escape_action, "/user/hand/left/input/menu/click"},
         {g_snap_action, "/user/hand/right/input/thumbstick/click"},
+        {g_interact_action, "/user/hand/right/input/a/click"},
+        {g_reload_action, "/user/hand/right/input/b/click"},
+        {g_weapon_action, "/user/hand/left/input/x/click"},
+        {g_status_action, "/user/hand/left/input/y/click"},
+        {g_run_action, "/user/hand/left/input/thumbstick/click"},
+        {g_fire_action, "/user/hand/left/input/trigger/value"},
+        {g_fire_action, "/user/hand/right/input/trigger/value"},
+        {g_sneak_action, "/user/hand/right/input/squeeze/value"},
+        {g_drop_action, "/user/hand/left/input/squeeze/value"},
     };
     const std::vector<std::pair<XrAction, const char*>> valve = {
         {g_move_action, "/user/hand/left/input/thumbstick"},
         {g_turn_action, "/user/hand/right/input/thumbstick"},
-        {g_escape_action, "/user/hand/right/input/a/click"},
-        {g_escape_action, "/user/hand/right/input/b/click"},
+        {g_escape_action, "/user/hand/left/input/system/click"},
         {g_snap_action, "/user/hand/right/input/thumbstick/click"},
+        {g_interact_action, "/user/hand/right/input/a/click"},
+        {g_reload_action, "/user/hand/right/input/b/click"},
+        {g_weapon_action, "/user/hand/left/input/a/click"},
+        {g_status_action, "/user/hand/left/input/b/click"},
+        {g_run_action, "/user/hand/left/input/thumbstick/click"},
+        {g_fire_action, "/user/hand/left/input/trigger/value"},
+        {g_fire_action, "/user/hand/right/input/trigger/value"},
+        {g_sneak_action, "/user/hand/right/input/squeeze/value"},
+        {g_drop_action, "/user/hand/left/input/squeeze/value"},
     };
     const std::vector<std::pair<XrAction, const char*>> microsoft = {
         {g_move_action, "/user/hand/left/input/thumbstick"},
         {g_turn_action, "/user/hand/right/input/thumbstick"},
         {g_escape_action, "/user/hand/right/input/menu/click"},
         {g_snap_action, "/user/hand/right/input/thumbstick/click"},
+        {g_run_action, "/user/hand/left/input/thumbstick/click"},
+        {g_fire_action, "/user/hand/right/input/trigger/value"},
+        {g_sneak_action, "/user/hand/right/input/squeeze/value"},
+        {g_drop_action, "/user/hand/left/input/squeeze/value"},
     };
 
     const bool oculusOk = SuggestBindings(
@@ -291,6 +335,14 @@ void DestroyInputActions() {
     g_turn_action = XR_NULL_HANDLE;
     g_escape_action = XR_NULL_HANDLE;
     g_snap_action = XR_NULL_HANDLE;
+    g_interact_action = XR_NULL_HANDLE;
+    g_reload_action = XR_NULL_HANDLE;
+    g_sneak_action = XR_NULL_HANDLE;
+    g_weapon_action = XR_NULL_HANDLE;
+    g_status_action = XR_NULL_HANDLE;
+    g_fire_action = XR_NULL_HANDLE;
+    g_run_action = XR_NULL_HANDLE;
+    g_drop_action = XR_NULL_HANDLE;
     if (g_action_set != XR_NULL_HANDLE) {
         ::xrDestroyActionSet(g_action_set);
         g_action_set = XR_NULL_HANDLE;
@@ -321,6 +373,14 @@ void SyncInputActions() {
     XrActionStateVector2f turn{XR_TYPE_ACTION_STATE_VECTOR2F};
     XrActionStateBoolean escape{XR_TYPE_ACTION_STATE_BOOLEAN};
     XrActionStateBoolean snap{XR_TYPE_ACTION_STATE_BOOLEAN};
+    XrActionStateBoolean interact{XR_TYPE_ACTION_STATE_BOOLEAN};
+    XrActionStateBoolean reload{XR_TYPE_ACTION_STATE_BOOLEAN};
+    XrActionStateBoolean weapon{XR_TYPE_ACTION_STATE_BOOLEAN};
+    XrActionStateBoolean status{XR_TYPE_ACTION_STATE_BOOLEAN};
+    XrActionStateBoolean run{XR_TYPE_ACTION_STATE_BOOLEAN};
+    XrActionStateFloat fire{XR_TYPE_ACTION_STATE_FLOAT};
+    XrActionStateFloat sneak{XR_TYPE_ACTION_STATE_FLOAT};
+    XrActionStateFloat drop{XR_TYPE_ACTION_STATE_FLOAT};
 
     ControllerInputSnapshot state;
     const auto getVector = [](XrActionStateVector2f& out, XrAction action,
@@ -340,6 +400,12 @@ void SyncInputActions() {
         return XR_SUCCEEDED(::xrGetActionStateBoolean(g_session, &info, &out)) &&
                out.isActive;
     };
+    const auto getFloat = [](XrActionStateFloat& out, XrAction action) {
+        XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+        info.action = action;
+        return XR_SUCCEEDED(::xrGetActionStateFloat(g_session, &info, &out)) &&
+               out.isActive;
+    };
 
     state.leftActive = getVector(move, g_move_action, 0.0f);
     state.rightActive = getVector(turn, g_turn_action, 0.0f);
@@ -349,10 +415,28 @@ void SyncInputActions() {
     state.rightY = turn.currentState.y;
     const bool escapeActive = getBoolean(escape, g_escape_action);
     const bool snapActive = getBoolean(snap, g_snap_action);
+    const bool interactActive = getBoolean(interact, g_interact_action);
+    const bool reloadActive = getBoolean(reload, g_reload_action);
+    const bool weaponActive = getBoolean(weapon, g_weapon_action);
+    const bool statusActive = getBoolean(status, g_status_action);
+    const bool runActive = getBoolean(run, g_run_action);
+    const bool fireActive = getFloat(fire, g_fire_action);
+    const bool sneakActive = getFloat(sneak, g_sneak_action);
+    const bool dropActive = getFloat(drop, g_drop_action);
     state.valid = state.leftActive || state.rightActive ||
-                  escapeActive || snapActive;
+                  escapeActive || snapActive || interactActive || reloadActive ||
+                  weaponActive || statusActive || runActive || fireActive ||
+                  sneakActive || dropActive;
     state.escapeDown = escapeActive && escape.currentState;
     state.snapDown = snapActive && snap.currentState;
+    state.interactDown = interactActive && interact.currentState;
+    state.reloadDown = reloadActive && reload.currentState;
+    state.weaponModeDown = weaponActive && weapon.currentState;
+    state.statusDown = statusActive && status.currentState;
+    state.runDown = runActive && run.currentState;
+    state.fireDown = fireActive && fire.currentState >= 0.5f;
+    state.sneakDown = sneakActive && sneak.currentState >= 0.5f;
+    state.dropDown = dropActive && drop.currentState >= 0.5f;
     ControllerInputPublish(state);
 }
 

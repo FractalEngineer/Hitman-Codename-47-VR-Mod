@@ -184,6 +184,34 @@ The older `WM_MOUSEMOVE` path remains only for manual `h47vr-look.txt` requests
 and migration fallback. The camera still performs its own translation,
 collision and visibility work.
 
+### OpenXR controller mapping
+
+The live Quest profile uses `units_per_m=110` provisionally and 180-degree/second
+smooth turning. Left-stick axes are inverted from the initial mapping because
+the engine's forward/left state is opposite OpenXR's initial signs. Movement and
+menu directions post held `WM_KEYDOWN`/`WM_KEYUP` messages; face buttons are
+100 ms taps. The current mapping is:
+
+| OpenXR input | Engine action |
+| --- | --- |
+| left thumbstick | W/S/A/D movement, with corrected signs |
+| left thumbstick click | Run (left Shift) |
+| right thumbstick | Native smooth yaw |
+| right thumbstick click | Directional 30-degree snap when deflected |
+| left menu | ESC/back |
+| left/right trigger | Fire (left mouse button) |
+| right A | Interact; Enter in menus |
+| right B | Reload; Escape in menus |
+| left X | Toggle weapon mode |
+| left Y | Status |
+| right grip | Sneak toggle |
+| left grip | Drop held item |
+
+The ESC startup guard ignores a button already held during the first four
+seconds of launch. This prevents the OpenXR session-entry press from closing the
+intro. Menu arrow/select/back routing is implemented but still needs a complete
+physical traversal check.
+
 ### Renderer candidates
 
 `RenderOpenGL.dll` exports only `Create` (RVA `0x1000`), so the renderer targets

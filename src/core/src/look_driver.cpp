@@ -72,10 +72,11 @@ double g_head_reference_pitch = 0.0;
 // each posted message within the engine's comfortable range, then let the next
 // frames close the remaining error. The deadband avoids a stream of one-pixel
 // corrections from prediction noise.
-constexpr double kHeadDeadbandDegrees = 0.15;
-constexpr int kHeadMaxPixelsPerFrame = 96;
-constexpr double kNativeMaxYawStepDegrees = 8.0;
-constexpr double kControllerTurnDegreesPerSecond = 120.0;
+constexpr double kHeadDeadbandDegrees = 0.08;
+constexpr double kNativePitchDeadbandDegrees = 0.35;
+constexpr int kHeadMaxPixelsPerFrame = 192;
+constexpr double kNativeMaxYawStepDegrees = 16.0;
+constexpr double kControllerTurnDegreesPerSecond = 180.0;
 constexpr double kSnapTurnDegrees = 30.0;
 
 // Dead reckoning of what we have asked the engine's camera to do. The engine
@@ -256,6 +257,14 @@ void WriteState() {
     if (measured) {
         file << " rawyaw=" << readback.yaw << " rawelevation=" << readback.pitch
              << " camera=" << readback.object << " epoch=" << readback.epoch;
+    }
+    if (g_head_valid && g_head_reference_valid) {
+        file << " headtarget="
+             << Wrap180(g_head_yaw - g_head_reference_yaw)
+             << " headpitch="
+             << -(g_head_pitch - g_head_reference_pitch)
+             << " headerror=" << Wrap180(
+                    Wrap180(g_head_yaw - g_head_reference_yaw) - yaw);
     }
     file << "\n";
 }
@@ -624,9 +633,11 @@ void LookDriverApplyNativeYaw() {
         if (controller.snapDown && controller.snapGeneration != 0 &&
             controller.snapGeneration != g_last_snap_generation) {
             g_last_snap_generation = controller.snapGeneration;
-            controllerTurnDegrees += controller.rightX < -0.08f
-                                         ? -kSnapTurnDegrees
-                                         : kSnapTurnDegrees;
+            if (controller.rightX < -0.25f) {
+                controllerTurnDegrees -= kSnapTurnDegrees;
+            } else if (controller.rightX > 0.25f) {
+                controllerTurnDegrees += kSnapTurnDegrees;
+            }
         }
     }
     // A controller turn rotates the player body, not the physical head. Move
@@ -683,7 +694,7 @@ void LookDriverApplyNativeYaw() {
         const double targetPitch =
             -(g_head_pitch - g_head_reference_pitch);
         const double errorPitch = targetPitch - currentPitch;
-        if (std::fabs(errorPitch) >= kHeadDeadbandDegrees) {
+        if (std::fabs(errorPitch) >= kNativePitchDeadbandDegrees) {
             const double pitchDelta = std::clamp(
                 errorPitch, -kNativeMaxYawStepDegrees, kNativeMaxYawStepDegrees);
             double pitchPixels = pitchDelta / kReadbackDegPerPixel;

@@ -8,6 +8,14 @@ struct ControllerInputSnapshot {
     bool rightActive = false;
     bool escapeDown = false;
     bool snapDown = false;
+    bool interactDown = false;
+    bool reloadDown = false;
+    bool sneakDown = false;
+    bool weaponModeDown = false;
+    bool statusDown = false;
+    bool fireDown = false;
+    bool runDown = false;
+    bool dropDown = false;
     float leftX = 0.0f;
     float leftY = 0.0f;
     float rightX = 0.0f;

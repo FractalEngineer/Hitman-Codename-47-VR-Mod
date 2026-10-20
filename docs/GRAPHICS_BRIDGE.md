@@ -157,9 +157,9 @@ a deliberate test.
   pitching the engine camera up 45 degrees loses the lower half of the submitted
   image. The remaining defect is orientation-dependent visibility. The engine
   visibility state and the final headset projection are not yet coincident under
-  the GL-seam pitch path. An opt-in native pitch feed produced coherent ceiling
-  and floor views without half-frame loss, but remains disabled pending sustained
-  movement, crouch and floor-sink validation.
+  the GL-seam pitch path. The native pitch feed produced coherent ceiling and
+  floor views without half-frame loss and was confirmed fixed by the user in the
+  live Quest session. It is now enabled for the active test profile.
 - The legacy renderer emits display-encoded color. XR presentation therefore
   prefers `GL_SRGB8_ALPHA8`; `GL_RGBA8` is a fallback for runtimes that do not
   offer it. Under VirtualDesktopXR the sRGB swapchain was accepted at
@@ -214,6 +214,12 @@ the predicted head pose, and `look_driver.cpp` adds the closed-loop yaw delta to
 Controller smooth/snap turning uses the same accumulator. Controller movement
 and menu navigation write the engine's per-key state; ESC is posted as a held
 window key pair because a zero-duration pair is ignored.
+
+The live controller profile now uses corrected movement axes, 180-degree/second
+smooth turn, directional stick-click snap, menu-button ESC, trigger fire,
+A/B/X/Y actions, grip actions and left-stick-click run. The current world scale
+is a provisional 110 units/metre. Eye height remains high relative to 47, and
+occasional camera jerks are still under investigation.
 
 ## Engine constraints to respect
 

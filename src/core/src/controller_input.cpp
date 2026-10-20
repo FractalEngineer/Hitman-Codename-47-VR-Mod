@@ -150,15 +150,15 @@ int MappedKeys(const ControllerInputSnapshot& state, int keys[5]) {
 
     int count = 0;
     if (gameplay) {
-        if (y < -kStickActivate) keys[count++] = 'W';
-        if (y > kStickActivate) keys[count++] = 'S';
-        if (x < -kStickActivate) keys[count++] = 'A';
-        if (x > kStickActivate) keys[count++] = 'D';
+        if (y < -kStickActivate) keys[count++] = 'S';
+        if (y > kStickActivate) keys[count++] = 'W';
+        if (x < -kStickActivate) keys[count++] = 'D';
+        if (x > kStickActivate) keys[count++] = 'A';
     } else {
-        if (y < -kStickActivate) keys[count++] = VK_UP;
-        if (y > kStickActivate) keys[count++] = VK_DOWN;
-        if (x < -kStickActivate) keys[count++] = VK_LEFT;
-        if (x > kStickActivate) keys[count++] = VK_RIGHT;
+        if (y < -kStickActivate) keys[count++] = VK_DOWN;
+        if (y > kStickActivate) keys[count++] = VK_UP;
+        if (x < -kStickActivate) keys[count++] = VK_RIGHT;
+        if (x > kStickActivate) keys[count++] = VK_LEFT;
     }
     return count;
 }
@@ -265,6 +265,156 @@ void ApplyDirectKeyState(const ControllerInputSnapshot& state) {
     }
 }
 
+void PostKeyboardKey(int vk, bool down) {
+    if (vk <= 0) {
+        return;
+    }
+    HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+    if (window == nullptr) {
+        return;
+    }
+    const UINT scan = ::MapVirtualKeyW(static_cast<UINT>(vk),
+                                       MAPVK_VK_TO_VSC);
+    LPARAM lparam = MAKELPARAM(1, static_cast<WORD>(scan));
+    if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN) {
+        lparam |= 0x01000000;
+    }
+    if (!down) {
+        lparam |= static_cast<LPARAM>(0xC0000000u);
+    }
+    ::PostMessageW(window, down ? WM_KEYDOWN : WM_KEYUP,
+                   static_cast<WPARAM>(vk), lparam);
+}
+
+void ApplyWindowKeyState(const ControllerInputSnapshot& state) {
+    int keys[5] = {};
+    const int count = MappedKeys(state, keys);
+    static int previous[5] = {};
+    static unsigned long transitions = 0;
+
+    for (int i = 0; i < 5; ++i) {
+        bool stillDown = false;
+        for (int n = 0; n < count; ++n) {
+            stillDown = stillDown || previous[i] == keys[n];
+        }
+        if (!stillDown && previous[i] != 0) {
+            PostKeyboardKey(previous[i], false);
+            ++transitions;
+        }
+    }
+    for (int n = 0; n < count; ++n) {
+        bool wasDown = false;
+        for (int i = 0; i < 5; ++i) {
+            wasDown = wasDown || previous[i] == keys[n];
+        }
+        if (!wasDown) {
+            PostKeyboardKey(keys[n], true);
+            ++transitions;
+        }
+    }
+    for (int i = 0; i < 5; ++i) {
+        previous[i] = i < count ? keys[i] : 0;
+    }
+    if (transitions == 1) {
+        H47VR_LOG_INFO("controller input: left-stick movement is posting "
+                       "engine keyboard messages");
+    }
+}
+
+struct PendingKeyRelease {
+    int vk;
+    ULONGLONG tick;
+};
+PendingKeyRelease g_pendingReleases[8] = {};
+int g_pendingReleaseCount = 0;
+
+void ProcessPendingKeyReleases() {
+    const ULONGLONG now = ::GetTickCount64();
+    for (int i = 0; i < g_pendingReleaseCount;) {
+        if (now >= g_pendingReleases[i].tick) {
+            PostKeyboardKey(g_pendingReleases[i].vk, false);
+            g_pendingReleases[i] =
+                g_pendingReleases[g_pendingReleaseCount - 1];
+            --g_pendingReleaseCount;
+        } else {
+            ++i;
+        }
+    }
+}
+
+void TapKeyboardKey(int vk) {
+    PostKeyboardKey(vk, true);
+    if (g_pendingReleaseCount <
+        static_cast<int>(sizeof(g_pendingReleases) /
+                         sizeof(g_pendingReleases[0]))) {
+        g_pendingReleases[g_pendingReleaseCount++] = {
+            vk, ::GetTickCount64() + 100};
+    } else {
+        PostKeyboardKey(vk, false);
+    }
+}
+
+void PostMouseButton(bool down) {
+    HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+    if (window == nullptr) {
+        return;
+    }
+    RECT client{};
+    if (!::GetClientRect(window, &client)) {
+        return;
+    }
+    const LPARAM position =
+        MAKELPARAM((client.right - client.left) / 2,
+                   (client.bottom - client.top) / 2);
+    ::PostMessageW(window, down ? WM_LBUTTONDOWN : WM_LBUTTONUP,
+                   down ? MK_LBUTTON : 0, position);
+}
+
+void ApplyButtonActions(const ControllerInputSnapshot& state) {
+    static ControllerInputSnapshot previous;
+    static bool fireDown = false;
+    static bool runDown = false;
+    const bool gameplay = CameraReadbackGameplayActive();
+
+    if (gameplay && state.interactDown && !previous.interactDown) {
+        TapKeyboardKey('E');
+    }
+    if (gameplay && state.reloadDown && !previous.reloadDown) {
+        TapKeyboardKey('R');
+    }
+    if (gameplay && state.weaponModeDown && !previous.weaponModeDown) {
+        TapKeyboardKey('T');
+    }
+    if (gameplay && state.statusDown && !previous.statusDown) {
+        TapKeyboardKey(VK_F2);
+    }
+    if (gameplay && state.sneakDown && !previous.sneakDown) {
+        TapKeyboardKey(VK_SPACE);
+    }
+    if (gameplay && state.dropDown && !previous.dropDown) {
+        TapKeyboardKey('G');
+    }
+    if (!gameplay && state.interactDown && !previous.interactDown) {
+        TapKeyboardKey(VK_RETURN);
+    }
+    if (!gameplay && state.reloadDown && !previous.reloadDown) {
+        TapKeyboardKey(VK_ESCAPE);
+    }
+
+    const bool wantFire = gameplay && state.fireDown;
+    if (wantFire != fireDown) {
+        PostMouseButton(wantFire);
+        fireDown = wantFire;
+    }
+    const bool wantRun = gameplay && state.runDown;
+    if (wantRun != runDown) {
+        PostKeyboardKey(VK_LSHIFT, wantRun);
+        runDown = wantRun;
+    }
+    previous = state;
+    ProcessPendingKeyReleases();
+}
+
 SHORT WINAPI HookGetAsyncKeyState(int vk) {
     const SHORT native = g_real_get_async_key_state != nullptr
                              ? g_real_get_async_key_state(vk)
@@ -331,16 +481,22 @@ void ControllerInputRearm() {
     }
 }
 
-void ControllerInputFrame(unsigned long) {
+void ControllerInputFrame(unsigned long frame) {
     RefreshDebugOverride();
     const ControllerInputSnapshot state = ControllerInputGet();
     ApplyDirectKeyState(state);
+    ApplyWindowKeyState(state);
+    ApplyButtonActions(state);
 
     static unsigned long long handledEscape = 0;
     static bool escapeDownPosted = false;
     static HWND escapeWindow = nullptr;
     static ULONGLONG escapeReleaseTick = 0;
-    if (state.valid && state.escapeDown && state.escapeGeneration != 0 &&
+    if (frame < 240) {
+        // A/B is often held while the user starts a VR session. Consume that
+        // initial state without turning it into an ESC that closes the intro.
+        handledEscape = state.escapeGeneration;
+    } else if (state.valid && state.escapeDown && state.escapeGeneration != 0 &&
         state.escapeGeneration != handledEscape) {
         handledEscape = state.escapeGeneration;
         escapeWindow = reinterpret_cast<HWND>(WindowKeepaliveWindow());

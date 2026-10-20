@@ -30,11 +30,13 @@ synthesizing `WM_MOUSEMOVE`; the old mouse path remains a diagnostic fallback.
 The desktop can mirror the completed left, right, or side-by-side XR eye image,
 and a synthetic head-pose path keeps culling work headless. Minimal controller
 actions cover movement, smooth/snap turning and ESC, with stick-to-arrow menu
-mapping. Pitch-dependent culling is the current blocker: straight-ahead rendering
-is coherent, but a 45-degree upward engine pitch still loses the lower half of
-the submitted image on the legacy GL-seam pitch path. The opt-in native pitch
-feed produced coherent upward and downward mirrored views, with movement and
-floor-sink behavior still awaiting validation.
+mapping. The live Quest pass confirmed native pitch fixes the culling loss;
+movement axes and snap direction have since been corrected, smooth turn is
+180 degrees/second, and a provisional 110-units-per-metre scale reduces the
+world size by about 10%. Straight-ahead rendering is coherent, but the legacy
+GL-seam pitch path still loses the lower half of the image under a 45-degree
+pitch. The active native pitch feed produces coherent upward and downward
+mirrored views. Eye height and occasional camera tracking jerks remain open.
 Menus and cinematics use theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head hiding and final eye-height calibration

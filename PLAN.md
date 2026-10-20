@@ -310,17 +310,17 @@ the "camera hook" the gate asked for is not needed for it.
       pairs, approximately 60 FPS, and a 256x256 centre readback with mean luminance 0.1713/0.1629
       and a 0.0446 left/right difference, proving non-black, non-identical eye images. A physical
       headset pass and visual inspection remain
-- [~] **Expand engine visibility to cover the XR FOV, 2026-10-20.** The narrow face list is now
-      traced to the polygon clipper at `HitmanDlc.dlc+0x93670`, called by `Clip`
-      (`RVA 0x93C50`) during `CamUpdate`. During gameplay the mod uses the clipper's existing
-      "nothing needed clipping" result, leaving the complete face list for the real per-eye GL
-      frustum. The controller is keyed to MouseConCam gameplay freshness and is restored for
-      menus/cinematics; it accepts either valid OpenXR FOVs or the desktop diagnostic gate.
-      A desktop A/B test at 122 degrees horizontal changed the SBS frame by 21.17 mean absolute
-      channel value and exposed substantially more wall/floor geometry; removing the gate restored
-      the frame within 0.46. The actual GL frustum can also expand from 45 to 122 degrees
-      horizontal when the renderer path is active. Physical-headset confirmation remains because
-      the user stopped headset testing before this build was available
+- [~] **Expand engine visibility to cover the XR FOV, 2026-10-20 - still open.** The candidate
+      polygon clipper is `HitmanDlc.dlc+0x93670`, called by `Clip` (`RVA 0x93C50`) during
+      `CamUpdate`, but it is **not yet the proven culling point**. With the same 122-degree
+      synthetic per-eye projection, enabling versus disabling its no-op return produced a `0.00`
+      image difference and identical 192-colour counts. The per-group `h47vr-clipall` byte also
+      produced `0.00`. Submitted vertices did not jump at the toggle (~1,840/frame before,
+      ~1,825/frame after), so the face list was already reduced before this clipper. The 122-degree
+      projection alone does change the frame, which explains the earlier false-positive A/B.
+      The remaining task is to find the face-list construction/culling decision before `Clip`.
+      A full-screen gray region around the training corridor is still visible evidence of the
+      unresolved blocker
 - [x] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon
       events: only the face-list draw consumer is replayed. The training capture remained at
       60 FPS and the gameplay frame count advanced at the normal cadence
@@ -381,10 +381,10 @@ sway oscillators removed most shaking; a faster yaw correction removed most
 fast-turn lag; moving headset pitch out of MouseConCam and into the GL vertex
 path fixed the slow floor sink. Theater height was corrected and confirmed.
 The physical run still showed mostly floor and lower walls with black peripheral
-wedges. The narrow visibility volume was then traced to `Clip`'s polygon clipper
-and bypassed for immersive gameplay; a desktop 122-degree A/B test exposed
-substantially more geometry and restored cleanly. The next headset session
-should confirm that the wedges disappear in the runtime eye images.
+wedges. A desktop 122-degree projection reproduces the wide view, but bypassing
+the candidate polygon clipper under that identical projection produced no image
+change. The peripheral culling blocker is therefore still open; the next target
+is the face-list construction before `Clip`.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

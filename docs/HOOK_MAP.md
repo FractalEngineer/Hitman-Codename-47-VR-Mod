@@ -202,10 +202,10 @@ Two consequences for Milestone 2, both from measurement rather than inference:
   views now replace that scale with a per-eye `glFrustum` built from OpenXR's
   four FOV tangents and the engine's current near/far planes.
 - The gameplay face list is CPU-clipped by `HitmanDlc.dlc+0x93670` inside
-  `Clip` (`0x93C50`). Returning zero takes that function's existing no-op path;
-  the mod uses it during immersive gameplay so the real per-eye OpenGL frustum
-  performs clipping. Returning the value is sufficient; the face-list data does
-  not need to be rebuilt.
+  `Clip` (`0x93C50`). Returning zero takes that function's existing no-op path,
+  but identical-projection A/B testing produced no visual or colour-count
+  change. It is therefore downstream of the real visibility rejection and is
+  retained only as a desktop diagnostic.
 
 `RenderOpenGL.dll` loaded at its preferred base `0x0FB70000` in that run, while
 `HitmanDlc.dlc` relocated. Both cases occur, which is why every address in this

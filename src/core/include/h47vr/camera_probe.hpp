@@ -2,15 +2,14 @@
 
 namespace h47vr {
 
-// Installs the camera/world-path probes and the immersive visibility override.
+// Installs the camera/world-path probes and the desktop visibility experiment.
 // The engine clips face groups inside `HitmanDlc.dlc` RVA 0x93670 during the
-// `Clip` call from `CamUpdate`. During gameplay the visibility controller can
-// use that function's "nothing needed clipping" result so the full face list
-// reaches OpenGL and the real per-eye frustum performs the clip.
+// `Clip` call from `CamUpdate`. The diagnostic can use that function's
+// "nothing needed clipping" result, but identical-projection A/B testing showed
+// no recovered geometry, so this is not a culling fix.
 //
-// The same module also samples the renderer's view object and can widen its
-// horizontal FOV. It is gated: ordinary desktop play keeps the native camera
-// and clipping path unchanged.
+// The same module samples the renderer's view object and can widen its
+// horizontal FOV for tests. Ordinary desktop play keeps the native path.
 bool CameraProbeInstall();
 
 // Re-installs after HitmanDlc.dlc is reloaded.

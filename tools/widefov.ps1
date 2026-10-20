@@ -1,18 +1,20 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Exercise the wide-FOV culling path without a headset.
+    Exercise the wide-FOV projection and candidate culling paths without a headset.
 
 .DESCRIPTION
-    Writes <game>\h47vr-widefov.txt. During gameplay the mod bypasses the
-    engine's narrow CPU polygon clip and the desktop SBS renderer builds a
-    symmetric per-eye projection at the requested horizontal FOV. This is a
-    diagnostic for the headset culling fix, not a normal play mode.
+    Writes <game>\h47vr-widefov.txt. During gameplay the desktop SBS renderer
+    builds a symmetric per-eye projection at the requested horizontal FOV.
+    -NoClipBypass keeps the native polygon path; without it, the candidate
+    0x93670 bypass is also enabled for comparison. The bypass is unproven and
+    this is a diagnostic, not a normal play mode.
 #>
 [CmdletBinding()]
 param(
     [ValidateRange(35.0, 140.0)]
     [double]$Degrees = 122.0,
+    [switch]$NoClipBypass,
     [switch]$Off,
     [string]$GameDir
 )
@@ -50,6 +52,8 @@ if ($Off) {
     exit 0
 }
 
-Set-Content -LiteralPath $gate -Value ("fov_deg={0}" -f $Degrees) -Encoding ascii
+$clip = if ($NoClipBypass) { 0 } else { 1 }
+Set-Content -LiteralPath $gate -Value ("fov_deg={0} clip={1}" -f $Degrees, $clip) `
+    -Encoding ascii
 Write-Host ("wide-FOV diagnostic on: {0} degrees horizontal -> {1}" -f
     $Degrees, $gate)

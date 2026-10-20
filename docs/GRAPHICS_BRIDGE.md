@@ -142,12 +142,11 @@ a deliberate test.
   needs a connected headset to validate eye positions, asymmetric tangents and
   head tracking.
 - Physical Quest validation confirmed the 67 mm head-local IPD, head tracking
-  and theater placement. Peripheral geometry was removed by the polygon clipper
-  at `HitmanDlc.dlc+0x93670`, called from `Clip` before the XR renderer receives
-  the face list. During gameplay the mod now uses the clipper's no-op result so
-  OpenGL's actual per-eye frustum performs the clip. A desktop 122-degree A/B
-  test changed the frame by 21.17, exposed more wall/floor geometry and restored
-  within 0.46 when disabled. The physical headset confirmation remains.
+  and theater placement. Peripheral geometry is still culled. The candidate
+  polygon clipper at `HitmanDlc.dlc+0x93670` was ruled out: under the same
+  122-degree desktop per-eye projection, enabling its no-op result produced a
+  0.00 image difference and the same 192 sampled colours. The real face-list
+  rejection occurs before `Clip` and remains the open target.
 - The null-HMD run proves native per-eye rendering and layer submission. The
   acquired 1512x1680 images have 24-bit depth attachments and receive the
   face-list replay directly. A centre readback measured mean luminance

@@ -4,7 +4,6 @@
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
-#include "h47vr/openxr_pose.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/symbols.hpp"
 
@@ -44,9 +43,9 @@ constexpr unsigned long kRenderViewSetupRva = 0x00028A40;
 constexpr int kViewFovOffset = 0x16E;
 
 // Clip calls this polygon clipper once per face group. Returning zero is the
-// function's own "geometry did not need clipping" result, leaving the original
-// face list intact for the renderer. During immersive gameplay the engine must
-// not cull against its narrower view; the per-eye OpenGL frustum clips later.
+// function's own "geometry did not need clipping" result. It is kept as a
+// desktop diagnostic only: an identical-wide-projection A/B test showed zero
+// image difference, proving this is not the earlier visibility rejection.
 constexpr unsigned long kPolygonClipRva = 0x00093670;
 
 // Clip decides for itself whether the group is drawn, and stores the answer in
@@ -92,6 +91,7 @@ bool g_scene_fields_reported = false;
 std::wstring g_wide_fov_path;
 unsigned int g_wide_fov_ticks = 0;
 std::atomic<double> g_wide_fov_override{0.0};
+std::atomic<bool> g_wide_fov_clip_bypass{true};
 
 struct ViewFovState {
     void* view;
@@ -757,9 +757,10 @@ void ObserveCameraUpdate(void* self, void* a1, void* a2) {
 
     // The stable first stack argument is the scene/render object; the `this`
     // object is a camera candidate. Both are worth watching.
-    if (g_scene_object.load() == nullptr && Readable(a1, kScanBytes)) {
+    if (a1 != g_scene_object.load() && Readable(a1, kScanBytes)) {
         g_scene_object = a1;
-        H47VR_LOG_INFO("cam update: scene object is %p (arg1, stable across calls)", a1);
+        g_scene_fields_reported = false;
+        H47VR_LOG_INFO("cam update: scene object is %p (arg1, changed after load)", a1);
         if (AddCandidate(a1)) {
             H47VR_LOG_INFO("  watching scene object %p; rotation-shaped blocks:", a1);
             ScanForRotations(a1);
@@ -787,6 +788,7 @@ void RefreshWideFovOverride() {
     }
     if (::GetFileAttributesW(g_wide_fov_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
         g_wide_fov_override = 0.0;
+        g_wide_fov_clip_bypass = true;
         return;
     }
     FILE* file = nullptr;
@@ -800,60 +802,22 @@ void RefreshWideFovOverride() {
     const char* value = std::strstr(text, "fov_deg=");
     if (value == nullptr) {
         g_wide_fov_override = 0.0;
+        g_wide_fov_clip_bypass = true;
         return;
     }
     const double degrees = std::atof(value + 8);
     if (!(degrees >= 35.0 && degrees <= 140.0)) {
         g_wide_fov_override = 0.0;
+        g_wide_fov_clip_bypass = true;
         return;
     }
     g_wide_fov_override = degrees * 3.14159265358979323846 / 180.0;
+    g_wide_fov_clip_bypass = std::strstr(text, "clip=0") == nullptr;
 }
 
 double DesiredVisibilityFov(void* view) {
-    const double forced = g_wide_fov_override.load();
-    if (forced > 0.0) {
-        return forced;
-    }
-
-    OpenXrEyePose pose;
-    if (!CameraReadbackGameplayActive() || !OpenXrPoseGet(&pose) ||
-        !pose.fovValid) {
-        return 0.0;
-    }
-
-    double horizontalHalf = 0.0;
-    double verticalHalf = 0.0;
-    for (int eye = 0; eye < 2; ++eye) {
-        const double left = std::fabs(static_cast<double>(pose.fov[eye][0]));
-        const double right = std::fabs(static_cast<double>(pose.fov[eye][1]));
-        const double up = std::fabs(static_cast<double>(pose.fov[eye][2]));
-        const double down = std::fabs(static_cast<double>(pose.fov[eye][3]));
-        if (right > horizontalHalf) horizontalHalf = right;
-        if (left > horizontalHalf) horizontalHalf = left;
-        if (up > verticalHalf) verticalHalf = up;
-        if (down > verticalHalf) verticalHalf = down;
-    }
-
-    // The renderer field is a horizontal FOV and derives vertical extents from
-    // the viewport aspect. Convert the runtime's vertical extent into the
-    // equivalent horizontal half-angle, then cover whichever axis is wider.
-    // A small margin covers rounding and eye translation.
-    const auto* base = static_cast<const unsigned char*>(view);
-    const double width = *reinterpret_cast<const double*>(base + 0x156);
-    const double height = *reinterpret_cast<const double*>(base + 0x15E);
-    double aspect = 4.0 / 3.0;
-    if (width > 0.0 && height > 0.0 && width < 100000.0 && height < 100000.0) {
-        aspect = width / height;
-    }
-    const double verticalAsHorizontal =
-        std::atan(std::tan(verticalHalf) * aspect);
-    if (verticalAsHorizontal > horizontalHalf) {
-        horizontalHalf = verticalAsHorizontal;
-    }
-    horizontalHalf += 1.0 * 3.14159265358979323846 / 180.0;
-    const double fov = horizontalHalf * 2.0;
-    return fov > 0.1 && fov < 2.45 ? fov : 0.0;
+    (void)view;
+    return g_wide_fov_override.load();
 }
 
 void ApplyVisibilityFov(void* view) {
@@ -1006,6 +970,7 @@ bool CameraProbeInstall() {
     g_view_fov_state_count = 0;
     std::memset(g_view_fov_states, 0, sizeof(g_view_fov_states));
     g_wide_fov_override = 0.0;
+    g_wide_fov_clip_bypass = true;
     g_skip_polygon_clip = 0;
     g_clip_visible_byte =
         reinterpret_cast<unsigned char*>(gameplay) + kClipVisibleByteRva;
@@ -1075,15 +1040,14 @@ void CameraProbeFrame(unsigned long frame) {
     RefreshCameraWrite();
     RefreshWideFovOverride();
     ApplyClipAlwaysDraw();
-    OpenXrEyePose pose;
     const bool wantSkipPolygonClip =
         CameraReadbackGameplayActive() &&
-        ((OpenXrPoseGet(&pose) && pose.fovValid) ||
-         g_wide_fov_override.load() > 0.0);
+        g_wide_fov_override.load() > 0.0 &&
+        g_wide_fov_clip_bypass.load();
     if (wantSkipPolygonClip != (g_skip_polygon_clip != 0)) {
         g_skip_polygon_clip = wantSkipPolygonClip ? 1 : 0;
-        H47VR_LOG_INFO("visibility: polygon clipping %s for immersive view",
-                       wantSkipPolygonClip ? "bypassed" : "restored");
+        H47VR_LOG_INFO("visibility: polygon-clip diagnostic %s (no headset effect)",
+                       wantSkipPolygonClip ? "enabled" : "disabled");
     }
     if (!g_write_from_frustum.load()) {
         ApplyCameraWrite();

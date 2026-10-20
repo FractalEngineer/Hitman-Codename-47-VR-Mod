@@ -388,15 +388,28 @@ the "camera hook" the gate asked for is not needed for it.
       with a four-second startup guard so a button held while the session starts cannot close the
       intro. A/B/X/Y map to interact/select, reload/back, weapon mode and status; both triggers fire,
       left stick click runs, right grip sneaks, and left grip drops the held item. Right-stick click
-      now snaps only when the stick is deflected left or right. Menus use stick-to-arrow messages
-      plus A to select and B to go back. Camera height and random tracking jerks remain open
+      now snaps only when the stick is deflected left or right. The final live movement mapping is
+      negative X = left (`A`), positive X = right (`D`), negative Y = back (`S`) and positive Y =
+      forward (`W`). Menus use the right stick as a native pointer with A/trigger as a held left
+      click; left stick arrows remain a fallback and B goes back. Camera height and random tracking
+      jerks remain open
+- [~] **Move eye-height calibration to the real engine camera, 2026-10-21.** `camera_lower` had
+      previously translated vertices at the GL seam, which changed the image but not the camera or
+      pitch pivot. The MouseConCam update now resolves its parent camera object (`self+0x08`) and
+      writes the world position at `parent+0x08` after the engine update. The native offset's
+      vertical pitch component is removed from the camera position so engine pitch can continue to
+      drive visibility without raising or sinking the eye. Live readback moved the training camera
+      from approximately Y `-305.9` to `-325.5` with `camera_lower=20`. A failed experiment that
+      collapsed the follow distance to `0.25` caused a half-floor spawn and has been reverted to
+      the usable `3.0`-unit setting. Final neck/eye alignment still needs the user's live check
 - [~] **Live headset integration pass, 2026-10-21.** The user confirmed that native engine pitch
       removes the previous culling loss. VirtualDesktopXR is presenting direct 2412x2596 sRGB eye
       images with the 67 mm profile. A provisional `units_per_m=110` reduces the perceived world
       size by 10%. Live `headtarget`/camera diagnostics measured yaw agreement within about 0.07
-      degrees at a sampled hold. The camera is still roughly one head too high relative to 47, and
-      occasional tracking jerks remain. The 0.35-degree native pitch deadband reduces small pitch
-      corrections but does not yet prove the jerk source is gone
+      degrees at a sampled hold. The height correction now targets the real engine camera position
+      rather than the final GL vertices; the remaining complaint is the pitch pivot moving around
+      the follow anchor. Occasional tracking jerks remain. The 0.35-degree native pitch deadband
+      reduces small pitch corrections but does not yet prove the jerk source is gone
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the

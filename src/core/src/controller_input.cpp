@@ -22,6 +22,8 @@ namespace h47vr {
 namespace {
 
 constexpr float kStickActivate = 0.32f;
+constexpr float kMenuPointerSpeedPixelsPerSecond = 720.0f;
+constexpr float kMenuPointerDeadzone = 0.12f;
 
 std::mutex g_mutex;
 ControllerInputSnapshot g_physical;
@@ -31,6 +33,16 @@ bool g_debug_active = false;
 bool g_installed = false;
 std::atomic<unsigned long> g_synthetic_keys{0};
 std::wstring g_test_path;
+
+bool g_menu_pointer_initialized = false;
+bool g_menu_pointer_reported = false;
+float g_menu_pointer_x = 0.0f;
+float g_menu_pointer_y = 0.0f;
+ULONGLONG g_menu_pointer_tick = 0;
+bool g_menu_click_held = false;
+ULONGLONG g_menu_click_release_tick = 0;
+std::atomic<unsigned long> g_menu_moves{0};
+std::atomic<unsigned long> g_menu_clicks{0};
 
 using GetAsyncKeyStateFn = SHORT(WINAPI*)(int);
 GetAsyncKeyStateFn g_real_get_async_key_state = nullptr;
@@ -96,10 +108,34 @@ void RefreshDebugOverride() {
         ReadNumber(line, "ry", &next.rightY);
         float escape = 0.0f;
         float snap = 0.0f;
+        float interact = 0.0f;
+        float reload = 0.0f;
+        float weapon = 0.0f;
+        float status = 0.0f;
+        float run = 0.0f;
+        float fire = 0.0f;
+        float sneak = 0.0f;
+        float drop = 0.0f;
         ReadNumber(line, "esc", &escape);
         ReadNumber(line, "snap", &snap);
+        ReadNumber(line, "interact", &interact);
+        ReadNumber(line, "reload", &reload);
+        ReadNumber(line, "weapon", &weapon);
+        ReadNumber(line, "status", &status);
+        ReadNumber(line, "run", &run);
+        ReadNumber(line, "fire", &fire);
+        ReadNumber(line, "sneak", &sneak);
+        ReadNumber(line, "drop", &drop);
         next.escapeDown = escape != 0.0f;
         next.snapDown = snap != 0.0f;
+        next.interactDown = interact != 0.0f;
+        next.reloadDown = reload != 0.0f;
+        next.weaponModeDown = weapon != 0.0f;
+        next.statusDown = status != 0.0f;
+        next.runDown = run != 0.0f;
+        next.fireDown = fire != 0.0f;
+        next.sneakDown = sneak != 0.0f;
+        next.dropDown = drop != 0.0f;
         next.leftX = ClampAxis(next.leftX);
         next.leftY = ClampAxis(next.leftY);
         next.rightX = ClampAxis(next.rightX);
@@ -139,26 +175,22 @@ int MappedKeys(const ControllerInputSnapshot& state, int keys[5]) {
     if (gameplay) {
         x = state.leftX;
         y = state.leftY;
-    } else if (std::fabs(state.leftX) + std::fabs(state.leftY) >=
-               std::fabs(state.rightX) + std::fabs(state.rightY)) {
+    } else {
         x = state.leftX;
         y = state.leftY;
-    } else {
-        x = state.rightX;
-        y = state.rightY;
     }
 
     int count = 0;
     if (gameplay) {
         if (y < -kStickActivate) keys[count++] = 'S';
         if (y > kStickActivate) keys[count++] = 'W';
-        if (x < -kStickActivate) keys[count++] = 'D';
-        if (x > kStickActivate) keys[count++] = 'A';
+        if (x < -kStickActivate) keys[count++] = 'A';
+        if (x > kStickActivate) keys[count++] = 'D';
     } else {
         if (y < -kStickActivate) keys[count++] = VK_DOWN;
         if (y > kStickActivate) keys[count++] = VK_UP;
-        if (x < -kStickActivate) keys[count++] = VK_RIGHT;
-        if (x > kStickActivate) keys[count++] = VK_LEFT;
+        if (x < -kStickActivate) keys[count++] = VK_LEFT;
+        if (x > kStickActivate) keys[count++] = VK_RIGHT;
     }
     return count;
 }
@@ -370,6 +402,157 @@ void PostMouseButton(bool down) {
                    down ? MK_LBUTTON : 0, position);
 }
 
+bool EngineRenderSize(int* width, int* height) {
+    void* slot = ResolveSymbol(
+        L"Globals.dll", "?g_pSysInterface@@3PAVZSysInterface@@A");
+    if (slot == nullptr) {
+        return false;
+    }
+    auto* sysInterface = *reinterpret_cast<unsigned char**>(slot);
+    if (sysInterface == nullptr) {
+        return false;
+    }
+    const int renderWidth =
+        *reinterpret_cast<int*>(sysInterface + 0x19);
+    const int renderHeight =
+        *reinterpret_cast<int*>(sysInterface + 0x1D);
+    if (renderWidth <= 0 || renderHeight <= 0 ||
+        renderWidth > 0x3FFF || renderHeight > 0x3FFF) {
+        return false;
+    }
+    if (width != nullptr) {
+        *width = renderWidth;
+    }
+    if (height != nullptr) {
+        *height = renderHeight;
+    }
+    return true;
+}
+
+bool ClientPointFromRender(float renderX, float renderY, LPARAM* point) {
+    HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+    if (window == nullptr) {
+        return false;
+    }
+    RECT client{};
+    if (!::GetClientRect(window, &client) ||
+        client.right <= client.left || client.bottom <= client.top) {
+        return false;
+    }
+    const int clientWidth = static_cast<int>(client.right - client.left);
+    const int clientHeight = static_cast<int>(client.bottom - client.top);
+    int renderWidth = clientWidth;
+    int renderHeight = clientHeight;
+    EngineRenderSize(&renderWidth, &renderHeight);
+    const int x = std::clamp(
+        static_cast<int>(renderX * clientWidth /
+                         (std::max)(renderWidth, 1)),
+        0, clientWidth - 1);
+    const int y = std::clamp(
+        static_cast<int>(renderY * clientHeight /
+                         (std::max)(renderHeight, 1)),
+        0, clientHeight - 1);
+    *point = MAKELPARAM(x, y);
+    return true;
+}
+
+void PostMenuPointerMove() {
+    HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+    LPARAM position = 0;
+    if (window == nullptr ||
+        !ClientPointFromRender(g_menu_pointer_x, g_menu_pointer_y, &position)) {
+        return;
+    }
+    if (::PostMessageW(window, WM_MOUSEMOVE, 0, position)) {
+        ++g_menu_moves;
+    }
+}
+
+void PostMenuPointerClick() {
+    HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+    LPARAM position = 0;
+    if (window == nullptr ||
+        !ClientPointFromRender(g_menu_pointer_x, g_menu_pointer_y, &position)) {
+        return;
+    }
+    if (::PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, position)) {
+        g_menu_click_held = true;
+        g_menu_click_release_tick = ::GetTickCount64() + 80;
+        H47VR_LOG_INFO("controller input: menu pointer click #%lu at %.0f,%.0f",
+                       ++g_menu_clicks, g_menu_pointer_x, g_menu_pointer_y);
+    }
+}
+
+void ProcessMenuPointer(const ControllerInputSnapshot& state, bool gameplay) {
+    if (gameplay) {
+        g_menu_pointer_initialized = false;
+        g_menu_pointer_reported = false;
+        g_menu_pointer_tick = 0;
+        return;
+    }
+
+    int width = 0;
+    int height = 0;
+    if (!EngineRenderSize(&width, &height)) {
+        HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+        RECT client{};
+        if (window == nullptr || !::GetClientRect(window, &client)) {
+            return;
+        }
+        width = client.right - client.left;
+        height = client.bottom - client.top;
+    }
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    const ULONGLONG now = ::GetTickCount64();
+    if (!g_menu_pointer_initialized) {
+        const bool requested =
+            std::fabs(state.rightX) >= kMenuPointerDeadzone ||
+            std::fabs(state.rightY) >= kMenuPointerDeadzone ||
+            state.interactDown || state.fireDown;
+        if (!requested) {
+            return;
+        }
+        g_menu_pointer_initialized = true;
+        g_menu_pointer_x = width * 0.5f;
+        g_menu_pointer_y = height * 0.5f;
+        g_menu_pointer_tick = now;
+        PostMenuPointerMove();
+        return;
+    }
+
+    const float dt = g_menu_pointer_tick == 0
+                         ? 0.0f
+                         : std::clamp((now - g_menu_pointer_tick) / 1000.0f,
+                                      0.0f, 0.05f);
+    g_menu_pointer_tick = now;
+    const float x = std::fabs(state.rightX) >= kMenuPointerDeadzone
+                        ? state.rightX
+                        : 0.0f;
+    const float y = std::fabs(state.rightY) >= kMenuPointerDeadzone
+                        ? -state.rightY
+                        : 0.0f;
+    if (x == 0.0f && y == 0.0f) {
+        return;
+    }
+
+    g_menu_pointer_x = std::clamp(
+        g_menu_pointer_x + x * kMenuPointerSpeedPixelsPerSecond * dt,
+        1.0f, static_cast<float>(width - 2));
+    g_menu_pointer_y = std::clamp(
+        g_menu_pointer_y + y * kMenuPointerSpeedPixelsPerSecond * dt,
+        1.0f, static_cast<float>(height - 2));
+    PostMenuPointerMove();
+    if (!g_menu_pointer_reported) {
+        g_menu_pointer_reported = true;
+        H47VR_LOG_INFO("controller input: right stick is driving the native "
+                       "menu pointer (%dx%d, %lu move(s))", width, height,
+                       g_menu_moves.load());
+    }
+}
+
 void ApplyButtonActions(const ControllerInputSnapshot& state) {
     static ControllerInputSnapshot previous;
     static bool fireDown = false;
@@ -394,7 +577,15 @@ void ApplyButtonActions(const ControllerInputSnapshot& state) {
     if (gameplay && state.dropDown && !previous.dropDown) {
         TapKeyboardKey('G');
     }
-    if (!gameplay && state.interactDown && !previous.interactDown) {
+    const bool menuClickDown =
+        !gameplay && (state.interactDown || state.fireDown);
+    const bool previousMenuClickDown =
+        !gameplay && (previous.interactDown || previous.fireDown);
+    if (menuClickDown && !previousMenuClickDown &&
+        g_menu_pointer_initialized) {
+        PostMenuPointerClick();
+    } else if (!gameplay && state.interactDown && !previous.interactDown &&
+               !g_menu_pointer_initialized) {
         TapKeyboardKey(VK_RETURN);
     }
     if (!gameplay && state.reloadDown && !previous.reloadDown) {
@@ -413,6 +604,16 @@ void ApplyButtonActions(const ControllerInputSnapshot& state) {
     }
     previous = state;
     ProcessPendingKeyReleases();
+    if (g_menu_click_held && ::GetTickCount64() >= g_menu_click_release_tick) {
+        HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
+        LPARAM position = 0;
+        if (window != nullptr &&
+            ClientPointFromRender(g_menu_pointer_x, g_menu_pointer_y,
+                                  &position)) {
+            ::PostMessageW(window, WM_LBUTTONUP, 0, position);
+        }
+        g_menu_click_held = false;
+    }
 }
 
 SHORT WINAPI HookGetAsyncKeyState(int vk) {
@@ -484,6 +685,7 @@ void ControllerInputRearm() {
 void ControllerInputFrame(unsigned long frame) {
     RefreshDebugOverride();
     const ControllerInputSnapshot state = ControllerInputGet();
+    ProcessMenuPointer(state, CameraReadbackGameplayActive());
     ApplyDirectKeyState(state);
     ApplyWindowKeyState(state);
     ApplyButtonActions(state);

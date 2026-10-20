@@ -12,10 +12,10 @@ as the work**.
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
 Repo state: verify with `git status --short --branch`; this handoff predates its
-own commit. This pass started from clean `main` at `43492d3`, synchronized with
-`origin/main`, and adds the engine-camera eye-union culling fix plus the
-corrected continuation notes. Do not assume the working tree is still clean or
-that the new commit was pushed.
+own commit. This pass started from `main` at `95687d2`, synchronized with
+`origin/main`, and records the native camera-origin correction, menu pointer and
+the rollback of the failed follow-distance experiment. Do not assume the working
+tree is still clean or that the new commit was pushed.
 The game may or may not be running; it keeps rendering while the desktop is used,
 so a session is free to launch it and walk away.
 
@@ -177,8 +177,8 @@ checked.
 that native engine pitch removed the half-frame culling loss. VirtualDesktopXR
 continues to present direct `2412x2596` sRGB eye images with the 67 mm profile.
 The user reported front/left movement reversed, so the stick mapping is now
-negative-Y = forward, positive-Y = back, negative-X = right and positive-X =
-left. Smooth turn is 180 degrees/second. Right-stick click only snaps when the
+negative-Y = back, positive-Y = forward, negative-X = left and positive-X =
+right. Smooth turn is 180 degrees/second. Right-stick click only snaps when the
 stick is deflected at least 0.25; a centred click does nothing.
 
 The left menu button is ESC, with a four-second startup guard because a held
@@ -191,24 +191,50 @@ current Quest mapping is:
 | right stick | smooth turn; click snaps in the deflected direction |
 | left menu | ESC/back |
 | right trigger or left trigger | fire |
-| A | interact; in menus, select |
+| A | interact; in menus, click the pointer |
 | B | reload; in menus, back |
 | X | toggle weapon mode |
 | Y | status |
 | right grip | sneak toggle |
 | left grip | drop held item |
 
-Movement and menu arrows post held keyboard messages to the game window; face
-buttons send 100 ms key taps and the fire trigger holds the mouse button. Menu
-select/back is new and still needs physical traversal testing.
+Movement posts held keyboard messages to the game window. In non-gameplay
+screens the right stick drives an absolute native pointer through
+`WM_MOUSEMOVE`, and A or either trigger posts a held 80 ms `WM_LBUTTONDOWN` /
+`WM_LBUTTONUP` at that point. Left-stick arrows remain a fallback. Face buttons
+send 100 ms key taps and the gameplay fire trigger holds the mouse button.
 
 The game runs provisionally at `units_per_m=110` instead of 100 to reduce the
 perceived world size by 10%. Live `h47vr-lookstate.txt` now includes
 `headtarget`, `headpitch` and `headerror` in addition to engine readback. A
 sampled hold agreed within 0.07 degrees, so the remaining head-follow complaint
 is likely transient/jitter rather than static gain error. Native pitch uses a
-0.35-degree deadband. The camera remains roughly one head above 47 and is the
-next engine-position calibration item.
+0.35-degree deadband.
+
+**Native camera origin and menu pointer, 2026-10-21.** The earlier
+`camera_lower` control only shifted eye-space vertices at the GL seam, so it
+visibly lowered the picture while leaving the engine camera and pitch pivot
+unchanged. The MouseConCam hook now resolves the parent camera object
+(`MouseConCam+0x08`) and adjusts its world-position float triple
+(`camera+0x08`) immediately after the engine update. Positive
+`camera_lower` lowers that real position; it no longer applies a GL vertical
+offset. The same hook removes the offset vector's vertical pitch component from
+the camera position, so native pitch still supplies visibility while no longer
+raising or sinking the eye along the follow sphere.
+
+Live readback on the training level confirmed the native write: with
+`camera_lower=20`, the camera Y moved from approximately `-305.9` to `-325.5`.
+`h47vr-camread.txt` now includes the resolved camera `position=`. A follow
+distance of `0.8` did not give a useful pivot change, and `0.25` spawned the
+player halfway through the floor; both experiments are reverted and the live
+profile is back at `distance=3.0`.
+
+The front-end pointer is now native rather than arrow-key guessing. The right
+stick integrates a render-space position (720 px/s, mapped to the game client)
+and posts `WM_MOUSEMOVE`; A or either trigger holds a left mouse button for
+80 ms. Headless verification on the front end reported an `800x600` pointer,
+multiple moves, and click words at the expected coordinates. Full physical
+menu traversal and final neck-height feel still need a live check.
 
 **Pitch-dependent culling is the current blocker, 2026-10-20.** Straight-ahead
 XR rendering matches the last good engine-FOV behavior and retains sRGB. Looking
@@ -990,16 +1016,19 @@ theater placement, sRGB color, native head yaw/pitch, XR mirroring and the
 expanded controller bridge are working. The user confirmed live that native pitch
 removes the culling loss. The next work is camera positioning and motion quality.
 
-1. **Lower the gameplay camera by roughly one head.** The user still reports the
-   camera sitting above 47's model. Find the engine's target/vertical offset and
-   adjust it inside MouseConCam rather than translating vertices at the GL seam.
+1. **Finish neck/eye alignment and eliminate the residual pitch arc.** Camera
+   height now modifies MouseConCam's real parent camera position and cancels the
+   offset's vertical pitch component. Validate that the pivot is on the neck and
+   characterize the remaining horizontal arc before changing the follow distance
+   again; `0.25` was not safe and caused a floor spawn.
 2. **Diagnose occasional head-tracked camera jerks.** `headtarget` and camera
    yaw agreed within about 0.07 degrees in a sampled hold, so inspect prediction
    timestamps, update cadence and pitch/yaw correction bursts rather than a static
    gain error.
-3. **Complete the live controller/menu pass.** Verify corrected movement signs,
-   180-degree/second turning, directional snap, menu-button ESC, A-select/B-back,
-   trigger fire, face buttons, grips and full front-end traversal.
+3. **Complete the live controller/menu pass.** Verify the restored left/right
+   movement signs, 180-degree/second turning, directional snap, menu-button ESC,
+   right-stick pointer with A/trigger click, B-back, trigger fire, face buttons,
+   grips and full front-end traversal.
 4. **Calibrate the final world scale.** The current headset test uses a
    provisional 110 units/metre with the user's 67 mm IPD; confirm it against a
    physical level landmark.

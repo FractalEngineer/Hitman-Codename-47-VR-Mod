@@ -14,8 +14,8 @@
     still need calibration.
 
 .PARAMETER Distance
-    Follow-camera distance in game units. At the working 100 units/metre scale,
-    the 3-unit default is 3 cm. Valid range is 0.25 to 149.
+    Follow-camera distance in game units. At the working 110 units/metre scale,
+    the 3-unit default is about 2.7 cm. Valid range is 0.25 to 149.
 
 .PARAMETER Off
     Remove the control file and restore the original follow distance.

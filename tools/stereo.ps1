@@ -20,6 +20,11 @@
 .PARAMETER GameUnitsPerMetre
     World-space scale. Defaults to 100, based on the 150-unit follow camera.
 
+.PARAMETER CameraLower
+    Vertical camera-origin correction in game units. Positive values lower the
+    engine camera after MouseConCam updates it, so collision, visibility and the
+    pitch pivot use the same corrected position.
+
 .PARAMETER Ipd
     Legacy override in raw game units. Use only for calibration experiments.
 
@@ -30,6 +35,7 @@
 param(
     [double]$IpdMillimeters = 67.0,
     [double]$GameUnitsPerMetre = 100.0,
+    [double]$CameraLower = 0.0,
     [double]$Ipd,
     [switch]$Off,
     [string]$GameDir
@@ -68,10 +74,14 @@ if ($Off) {
 if ($IpdMillimeters -le 0 -or $IpdMillimeters -gt 1000) {
     throw 'IpdMillimeters must be between 0 and 1000.'
 }
+if ($CameraLower -lt -100 -or $CameraLower -gt 100) {
+    throw 'CameraLower must be between -100 and 100 game units.'
+}
 $request = if ($PSBoundParameters.ContainsKey('Ipd')) {
     "ipd={0}" -f $Ipd
 } else {
-    "ipd_mm={0} units_per_m={1}" -f $IpdMillimeters, $GameUnitsPerMetre
+    "ipd_mm={0} units_per_m={1} camera_lower={2}" -f `
+        $IpdMillimeters, $GameUnitsPerMetre, $CameraLower
 }
 Set-Content -LiteralPath $control -Value $request -Encoding ascii
 Write-Host ("stereo on: {0}" -f $control)

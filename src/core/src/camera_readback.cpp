@@ -6,6 +6,7 @@
 #include "h47vr/look_driver.hpp"
 #include "h47vr/mod.hpp"
 #include "h47vr/paths.hpp"
+#include "h47vr/stereo_renderer.hpp"
 #include "h47vr/symbols.hpp"
 
 #include <windows.h>
@@ -33,6 +34,8 @@ MouseConCamUpdateFn g_real_update = nullptr;
 std::atomic<bool> g_installed{false};
 std::mutex g_state_mutex;
 CameraReadback g_state;
+void* g_lowered_camera_object = nullptr;
+float g_applied_camera_lower = 0.0f;
 
 bool Readable(const void* address, size_t bytes) {
     if (address == nullptr) {
@@ -58,6 +61,46 @@ bool Readable(const void* address, size_t bytes) {
 
 float Degrees(float radians) {
     return radians * 57.29577951308232f;
+}
+
+float* CameraPosition(void* self) {
+    if (!Readable(self, 0x0C)) {
+        return nullptr;
+    }
+    auto* parent = *reinterpret_cast<unsigned char**>(
+        static_cast<unsigned char*>(self) + 0x08);
+    if (!Readable(parent, 0x14)) {
+        return nullptr;
+    }
+    return reinterpret_cast<float*>(parent + 0x08);
+}
+
+void RestoreCameraLower(void* self) {
+    if (self == nullptr || self != g_lowered_camera_object ||
+        g_applied_camera_lower == 0.0f) {
+        return;
+    }
+    float* position = CameraPosition(self);
+    if (position != nullptr) {
+        position[1] += g_applied_camera_lower;
+    }
+    g_applied_camera_lower = 0.0f;
+}
+
+void ApplyCameraLower(void* self, float lowerUnits) {
+    float* position = CameraPosition(self);
+    if (position == nullptr || !std::isfinite(lowerUnits) ||
+        !Readable(self, 0x39)) {
+        g_lowered_camera_object = nullptr;
+        g_applied_camera_lower = 0.0f;
+        return;
+    }
+    const auto* offset = reinterpret_cast<const float*>(
+        static_cast<const unsigned char*>(self) + 0x2d);
+    const float correction = offset[1] + lowerUnits;
+    position[1] -= correction;
+    g_lowered_camera_object = self;
+    g_applied_camera_lower = correction;
 }
 
 void ObserveAfterUpdate(void* self) {
@@ -94,6 +137,11 @@ void ObserveAfterUpdate(void* self) {
     g_state.offset[0] = x;
     g_state.offset[1] = y;
     g_state.offset[2] = z;
+    if (float* position = CameraPosition(self)) {
+        g_state.cameraPosition[0] = position[0];
+        g_state.cameraPosition[1] = position[1];
+        g_state.cameraPosition[2] = position[2];
+    }
     g_state.lastUpdateMs = ::GetTickCount64();
     ++g_state.updates;
 }
@@ -111,10 +159,12 @@ void NeutralizeFirstPersonSway(void* self) {
 
 void __fastcall HookMouseConCamUpdate(void* self, void*) {
     NeutralizeFirstPersonSway(self);
+    RestoreCameraLower(self);
     LookDriverApplyNativeYaw();
     if (g_real_update != nullptr) {
         g_real_update(self);
     }
+    ApplyCameraLower(self, StereoRendererCameraLowerUnits());
     NeutralizeFirstPersonSway(self);
     ObserveAfterUpdate(self);
 }
@@ -127,10 +177,11 @@ void WriteState(const CameraReadback& state) {
     }
     std::fprintf(file,
                  "valid=%d yaw=%.4f pitch=%.4f offset=%.4f,%.4f,%.4f "
-                 "camera=%p epoch=%lu updates=%lu\n",
+                 "position=%.4f,%.4f,%.4f camera=%p epoch=%lu updates=%lu\n",
                  state.valid ? 1 : 0, state.yaw, state.pitch, state.offset[0],
-                 state.offset[1], state.offset[2], state.object, state.epoch,
-                 state.updates);
+                 state.offset[1], state.offset[2], state.cameraPosition[0],
+                 state.cameraPosition[1], state.cameraPosition[2],
+                 state.object, state.epoch, state.updates);
     std::fclose(file);
 }
 
@@ -190,6 +241,8 @@ bool CameraReadbackRearm() {
         g_state.lastUpdateMs = 0;
         ++g_state.epoch;
     }
+    g_lowered_camera_object = nullptr;
+    g_applied_camera_lower = 0.0f;
     return CameraReadbackInstall();
 }
 

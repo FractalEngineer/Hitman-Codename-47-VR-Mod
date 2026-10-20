@@ -212,14 +212,17 @@ Head yaw no longer uses synthesized mouse messages. `openxr_pose.cpp` publishes
 the predicted head pose, and `look_driver.cpp` adds the closed-loop yaw delta to
 `g_pSysInterface + 0xA95` immediately before MouseConCam's native update.
 Controller smooth/snap turning uses the same accumulator. Controller movement
-and menu navigation write the engine's per-key state; ESC is posted as a held
-window key pair because a zero-duration pair is ignored.
+uses the engine's per-key state; ESC is posted as a held window key pair because
+a zero-duration pair is ignored. Menus additionally use the right stick as an
+absolute pointer, with A or either trigger posting a held left click.
 
 The live controller profile now uses corrected movement axes, 180-degree/second
 smooth turn, directional stick-click snap, menu-button ESC, trigger fire,
 A/B/X/Y actions, grip actions and left-stick-click run. The current world scale
-is a provisional 110 units/metre. Eye height remains high relative to 47, and
-occasional camera jerks are still under investigation.
+is a provisional 110 units/metre. Eye-height calibration now lowers the real
+MouseConCam parent camera position after each engine update and removes the
+offset's vertical pitch component from that position. Final neck/eye alignment
+and occasional camera jerks are still under investigation.
 
 ## Engine constraints to respect
 

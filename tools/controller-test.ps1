@@ -19,6 +19,14 @@ param(
     [double]$RightY = 0.0,
     [switch]$Escape,
     [switch]$Snap,
+    [switch]$Interact,
+    [switch]$Reload,
+    [switch]$Weapon,
+    [switch]$Status,
+    [switch]$Run,
+    [switch]$Fire,
+    [switch]$Sneak,
+    [switch]$Drop,
     [switch]$Off,
     [string]$GameDir
 )
@@ -51,9 +59,17 @@ if ($Off) {
     Write-Host 'controller test override off'
 } else {
     Set-Content -LiteralPath $control -Encoding ascii -Value (
-        'lx={0} ly={1} rx={2} ry={3} esc={4} snap={5}' -f
+        'lx={0} ly={1} rx={2} ry={3} esc={4} snap={5} interact={6} reload={7} weapon={8} status={9} run={10} fire={11} sneak={12} drop={13}' -f
             $LeftX, $LeftY, $RightX, $RightY,
             $(if ($Escape) { 1 } else { 0 }),
-            $(if ($Snap) { 1 } else { 0 }))
+            $(if ($Snap) { 1 } else { 0 }),
+            $(if ($Interact) { 1 } else { 0 }),
+            $(if ($Reload) { 1 } else { 0 }),
+            $(if ($Weapon) { 1 } else { 0 }),
+            $(if ($Status) { 1 } else { 0 }),
+            $(if ($Run) { 1 } else { 0 }),
+            $(if ($Fire) { 1 } else { 0 }),
+            $(if ($Sneak) { 1 } else { 0 }),
+            $(if ($Drop) { 1 } else { 0 }))
     Write-Host 'controller test sample written'
 }

@@ -150,7 +150,7 @@ headers; the modules are relocatable, so never hard-code the VA.
 | 1d | Scope camera | `HitmanDlc.dlc` | `_ZCAMERA_ScopeCamera` | `0x0002D060` | located (Milestone 4) |
 | 1e | Camera selection list | `HitmanDlc.dlc` | `_ZLIST_SortCameraControls` | `0x00023430` | located |
 | 1f | Camera class info | `HitmanDlc.dlc` | `?ZCAMERA_ClassInfo@@3VZCLASSINFOZCAMERA@@A` | `0x00244320` | located |
-| 1g | MouseConCam per-frame update / live pose | `HitmanDlc.dlc` | (not exported) | `0x00026F20` | hooked; yaw/pitch read from `+0x2D/+0x31/+0x35` after update |
+| 1g | MouseConCam per-frame update / live pose | `HitmanDlc.dlc` | (not exported) | `0x00026F20` | hooked; yaw/pitch read from `+0x2D/+0x31/+0x35`; parent camera `self+0x08`, position `camera+0x08` |
 | 1h | MouseConCam follow-distance targets | `HitmanDlc.dlc` | (not exported) | `0x0002714F` / `0x00027158` | gated first-person override; immediates `150.0` / `100.0` |
 | 4 | Visibility / draw distance | `HitmanDlc.dlc` | `_ZGEOM_AdoptVisibility` | `0x00159050` | descriptor initializer only; helper RVA `0x00159080` is a generic message handler |
 | 4a | Visibility query | `HitmanDlc.dlc` | `_ZLIST_CheckVisible` | `0x0014DE30` | descriptor initializer only; helper RVA `0x0014DE60` is a generic message handler |
@@ -184,6 +184,13 @@ The older `WM_MOUSEMOVE` path remains only for manual `h47vr-look.txt` requests
 and migration fallback. The camera still performs its own translation,
 collision and visibility work.
 
+After the original update returns, the hook resolves `MouseConCam+0x08` to the
+parent camera object and adjusts its world position at `camera+0x08`.
+`camera_lower` changes this real float Y value, and the offset vector's vertical
+pitch component is removed there so native pitch is available to the visibility
+pass without moving the eye up or down along the follow sphere. This replaced
+the older GL-seam vertical shift.
+
 ### OpenXR controller mapping
 
 The live Quest profile uses `units_per_m=110` provisionally and 180-degree/second
@@ -200,7 +207,7 @@ menu directions post held `WM_KEYDOWN`/`WM_KEYUP` messages; face buttons are
 | right thumbstick click | Directional 30-degree snap when deflected |
 | left menu | ESC/back |
 | left/right trigger | Fire (left mouse button) |
-| right A | Interact; Enter in menus |
+| right A | Interact; click the native menu pointer |
 | right B | Reload; Escape in menus |
 | left X | Toggle weapon mode |
 | left Y | Status |
@@ -209,8 +216,9 @@ menu directions post held `WM_KEYDOWN`/`WM_KEYUP` messages; face buttons are
 
 The ESC startup guard ignores a button already held during the first four
 seconds of launch. This prevents the OpenXR session-entry press from closing the
-intro. Menu arrow/select/back routing is implemented but still needs a complete
-physical traversal check.
+intro. In non-gameplay screens the right stick posts absolute `WM_MOUSEMOVE`
+coordinates and A or either trigger posts an 80 ms held left click; left-stick
+arrows remain a fallback. Full physical menu traversal still needs a check.
 
 ### Renderer candidates
 

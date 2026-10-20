@@ -23,11 +23,13 @@ namespace {
 
 constexpr float kDefaultIpdMillimetres = 67.0f;
 constexpr float kDefaultGameUnitsPerMetre = 100.0f;
+constexpr float kDefaultCameraLowerUnits = 0.0f;
 
 std::wstring g_control_path;
 std::atomic<bool> g_active{false};
 std::atomic<float> g_eye_separation{kDefaultIpdMillimetres /
                                    (1000.0f / kDefaultGameUnitsPerMetre)};
+std::atomic<float> g_camera_lower_units{kDefaultCameraLowerUnits};
 std::atomic<unsigned long> g_world_draws{0};
 std::atomic<unsigned long> g_stereo_passes{0};
 std::atomic<unsigned long> g_theater_passes{0};
@@ -37,6 +39,7 @@ float g_loaded_separation = kDefaultIpdMillimetres /
                             (1000.0f / kDefaultGameUnitsPerMetre);
 float g_loaded_ipd_mm = kDefaultIpdMillimetres;
 float g_loaded_units_per_metre = kDefaultGameUnitsPerMetre;
+float g_loaded_camera_lower_units = kDefaultCameraLowerUnits;
 std::wstring g_state_path;
 bool g_gameplay_active = false;
 int g_last_mode = -1;
@@ -63,6 +66,7 @@ void WriteState() {
          << " gameplay=" << (g_gameplay_active ? 1 : 0)
          << " stereo=" << (g_active.load() ? 1 : 0)
          << " eye_separation=" << g_eye_separation.load()
+         << " camera_lower=" << g_camera_lower_units.load()
          << " stereo_passes=" << g_stereo_passes.load()
          << " theater_passes=" << g_theater_passes.load() << "\n";
 }
@@ -121,12 +125,17 @@ void RefreshStereo() {
     const std::string line = ReadFirstLine(g_control_path);
     float ipdMm = kDefaultIpdMillimetres;
     float unitsPerMetre = kDefaultGameUnitsPerMetre;
+    float cameraLowerUnits = kDefaultCameraLowerUnits;
     float legacySeparation = 0.0f;
     ReadNumber(line, "ipd_mm", &ipdMm);
     ReadNumber(line, "units_per_m", &unitsPerMetre);
+    ReadNumber(line, "camera_lower", &cameraLowerUnits);
     const bool hasLegacySeparation = ReadNumber(line, "ipd", &legacySeparation);
     if (unitsPerMetre <= 1.0f || unitsPerMetre > 100000.0f) {
         unitsPerMetre = kDefaultGameUnitsPerMetre;
+    }
+    if (!(cameraLowerUnits >= -100.0f && cameraLowerUnits <= 100.0f)) {
+        cameraLowerUnits = kDefaultCameraLowerUnits;
     }
     float separation = hasLegacySeparation
                            ? legacySeparation
@@ -138,14 +147,17 @@ void RefreshStereo() {
 
     const bool wasActive = g_active.exchange(true);
     if (!wasActive || separation != g_loaded_separation ||
-        ipdMm != g_loaded_ipd_mm || unitsPerMetre != g_loaded_units_per_metre) {
+        ipdMm != g_loaded_ipd_mm || unitsPerMetre != g_loaded_units_per_metre ||
+        cameraLowerUnits != g_loaded_camera_lower_units) {
         g_loaded_separation = separation;
         g_loaded_ipd_mm = ipdMm;
         g_loaded_units_per_metre = unitsPerMetre;
+        g_loaded_camera_lower_units = cameraLowerUnits;
         g_eye_separation = separation;
+        g_camera_lower_units = cameraLowerUnits;
         H47VR_LOG_INFO("stereo: on, IPD %.1f mm = %.3f game units "
-                       "(%.1f game units/metre)",
-                       ipdMm, separation, unitsPerMetre);
+                       "(%.1f game units/metre), camera lower %.1f units",
+                       ipdMm, separation, unitsPerMetre, cameraLowerUnits);
     }
 }
 
@@ -248,6 +260,10 @@ StereoMode StereoRendererMode() {
         return StereoMode::Off;
     }
     return g_gameplay_active ? StereoMode::Stereo : StereoMode::Theater;
+}
+
+float StereoRendererCameraLowerUnits() {
+    return g_camera_lower_units.load();
 }
 
 void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {

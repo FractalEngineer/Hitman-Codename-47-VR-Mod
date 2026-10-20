@@ -9,6 +9,7 @@ GlProbeReportFn g_gl_probe_report = nullptr;
 GlStereoAvailableFn g_gl_stereo_available = nullptr;
 GlStereoPerspectiveFn g_gl_stereo_perspective = nullptr;
 GlStereoSourceSizeFn g_gl_stereo_source_size = nullptr;
+GlPerspectiveNearFn g_gl_perspective_near = nullptr;
 GlStereoBeginEyeFn g_gl_stereo_begin_eye = nullptr;
 GlStereoEndEyeFn g_gl_stereo_end_eye = nullptr;
 

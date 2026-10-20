@@ -9,6 +9,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +34,23 @@ constexpr unsigned long kClipRva = 0x00093C50;
 // from the renderer's view object sampled below; conflating the two was the
 // source of stale field offsets during earlier probing.
 constexpr unsigned long kCameraUpdateRva = 0x00096120;
+
+// The per-geometry face-list construction call is the indirect
+// `call [vtable+0x398]` at CamUpdate RVA 0x965DE. The following six-byte
+// instruction is a safe post-call hook point. At that point ESI still holds the
+// per-geometry `this` object and EBP addresses the CamUpdate stack frame, whose
+// -0x8c slot now contains the returned face-list object.
+constexpr unsigned long kGeometryListPostCallRva = 0x000965E4;
+constexpr int kGeometryListFrameOffset = -0x8C;
+constexpr int kGeometrySourceOffset = -0x30;
+constexpr int kGeometryAuxOffset = -0x24;
+
+// Builds the gameplay camera's projection and clipping planes. Its first stack
+// argument is the horizontal FOV in radians; the following doubles are the
+// near/far range and the final pair is the integer viewport size. Replacing the
+// FOV here updates the state the engine uses for its own visibility work, not
+// just the final OpenGL projection.
+constexpr unsigned long kCameraProjectionRva = 0x00092040;
 
 // The renderer's view setup reads the active projection constants from its
 // first stack argument, then builds the frustum used for the frame. It runs once
@@ -78,6 +96,10 @@ extern "C" void* h47vr_view_trampoline = nullptr;
 extern "C" void* h47vr_view_args_target = nullptr;
 extern "C" void* h47vr_view_ecx = nullptr;
 extern "C" void* h47vr_polygon_clip_trampoline = nullptr;
+extern "C" void* h47vr_geometry_list_trampoline = nullptr;
+extern "C" void* h47vr_geometry_list_args_target = nullptr;
+using CameraProjectionFn = void(__thiscall*)(void*, double, double, double, int, int);
+CameraProjectionFn g_real_camera_projection = nullptr;
 
 // Read directly by the naked detour, so it must remain a plain byte.
 unsigned char g_skip_polygon_clip = 0;
@@ -91,7 +113,9 @@ bool g_scene_fields_reported = false;
 std::wstring g_wide_fov_path;
 unsigned int g_wide_fov_ticks = 0;
 std::atomic<double> g_wide_fov_override{0.0};
+std::atomic<double> g_runtime_visibility_fov{0.0};
 std::atomic<bool> g_wide_fov_clip_bypass{true};
+std::atomic<bool> g_geometry_probe_open{false};
 
 struct ViewFovState {
     void* view;
@@ -184,6 +208,25 @@ extern "C" __declspec(naked) void h47vr_detour_polygon_clip() {
     }
 }
 
+// Runs at CamUpdate RVA 0x965E4, immediately after the +0x398 virtual call.
+// The original ESI is the first dword in the pushad block and the original EBP
+// is the fourth; capture both before the C++ observer can disturb them.
+extern "C" __declspec(naked) void h47vr_detour_geometry_list() {
+    __asm {
+        pushfd
+        pushad
+        mov eax, dword ptr [esp + 4]
+        mov edx, dword ptr [esp + 8]
+        push edx
+        push eax
+        call dword ptr [h47vr_geometry_list_args_target]
+        add esp, 8
+        popad
+        popfd
+        jmp dword ptr [h47vr_geometry_list_trampoline]
+    }
+}
+
 // Committed, readable pages only. Every pointer here comes out of live engine
 // state, so it is worth one cheap check before dereferencing it.
 bool Readable(const void* address, size_t bytes) {
@@ -206,6 +249,145 @@ bool Readable(const void* address, size_t bytes) {
     const auto start = reinterpret_cast<std::uintptr_t>(address);
     const auto end = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
     return start + bytes <= end;
+}
+
+unsigned long ModuleRelativeRva(const void* address, HMODULE module) {
+    if (address == nullptr || module == nullptr) {
+        return 0;
+    }
+    const auto value = reinterpret_cast<std::uintptr_t>(address);
+    const auto base = reinterpret_cast<std::uintptr_t>(module);
+    if (value < base || value - base >= 0x10000000u) {
+        return 0;
+    }
+    return static_cast<unsigned long>(value - base);
+}
+
+struct GeometryListProbe {
+    void* self;
+    void* vtable;
+    void* method;
+    void* geometry;
+    void* geometryAux;
+    void* result;
+    void* head;
+    unsigned long calls;
+    unsigned long nonempty;
+    unsigned long empty;
+};
+
+constexpr int kMaxGeometryListProbes = 24;
+GeometryListProbe g_geometry_list_probes[kMaxGeometryListProbes] = {};
+int g_geometry_list_probe_count = 0;
+
+// Observes the return of the per-geometry +0x398 virtual call. This is the
+// first point at which the engine has produced the CPU-side face list, so the
+// returned head tells us whether the +0x398 implementation is where peripheral
+// geometry is rejected or whether the list is already short on entry.
+void ObserveGeometryListPostCall(void* self, void* frameBase) {
+    if (!g_geometry_probe_open.load(std::memory_order_relaxed) ||
+        !Readable(self, 4) ||
+        !Readable(static_cast<unsigned char*>(frameBase) - 0x90, 0x94)) {
+        return;
+    }
+
+    auto* frame = static_cast<unsigned char*>(frameBase);
+    void* geometry = nullptr;
+    void* geometryAux = nullptr;
+    void* result = nullptr;
+    if (Readable(frame + kGeometrySourceOffset, sizeof(void*))) {
+        geometry = *reinterpret_cast<void**>(frame + kGeometrySourceOffset);
+    }
+    if (Readable(frame + kGeometryAuxOffset, sizeof(void*))) {
+        geometryAux = *reinterpret_cast<void**>(frame + kGeometryAuxOffset);
+    }
+    if (Readable(frame + kGeometryListFrameOffset, sizeof(void*))) {
+        result = *reinterpret_cast<void**>(frame + kGeometryListFrameOffset);
+    }
+
+    void* vtable = *reinterpret_cast<void**>(self);
+    void* method = nullptr;
+    if (vtable != nullptr &&
+        Readable(static_cast<unsigned char*>(vtable) + 0x398, sizeof(void*))) {
+        method = *reinterpret_cast<void**>(
+            static_cast<unsigned char*>(vtable) + 0x398);
+    }
+
+    void* head = nullptr;
+    if (result != nullptr &&
+        Readable(static_cast<unsigned char*>(result) + 0x24, sizeof(void*))) {
+        void* headSlot = *reinterpret_cast<void**>(
+            static_cast<unsigned char*>(result) + 0x24);
+        if (headSlot != nullptr &&
+            Readable(static_cast<unsigned char*>(headSlot) - 4, sizeof(void*))) {
+            head = *reinterpret_cast<void**>(
+                static_cast<unsigned char*>(headSlot) - 4);
+        }
+    }
+
+    GeometryListProbe* probe = nullptr;
+    for (int i = 0; i < g_geometry_list_probe_count; ++i) {
+        if (g_geometry_list_probes[i].self == self) {
+            probe = &g_geometry_list_probes[i];
+            break;
+        }
+    }
+
+    bool first = false;
+    if (probe == nullptr && g_geometry_list_probe_count < kMaxGeometryListProbes) {
+        probe = &g_geometry_list_probes[g_geometry_list_probe_count++];
+        probe->self = self;
+        probe->vtable = vtable;
+        probe->method = method;
+        first = true;
+    }
+    if (probe == nullptr) {
+        return;
+    }
+
+    probe->geometry = geometry;
+    probe->geometryAux = geometryAux;
+    probe->result = result;
+    probe->head = head;
+    ++probe->calls;
+    if (head != nullptr) {
+        ++probe->nonempty;
+    } else {
+        ++probe->empty;
+    }
+
+    if (!first && probe->calls % 600 != 0) {
+        return;
+    }
+
+    HMODULE gameplay = LoadedModule(L"HitmanDlc.dlc");
+    unsigned long selfRva = ModuleRelativeRva(self, gameplay);
+    unsigned long vtableRva = ModuleRelativeRva(vtable, gameplay);
+    unsigned long methodRva = ModuleRelativeRva(method, gameplay);
+    unsigned long geometryRva = ModuleRelativeRva(geometry, gameplay);
+    unsigned long geometryVtableRva = 0;
+    if (geometry != nullptr && Readable(geometry, sizeof(void*))) {
+        geometryVtableRva =
+            ModuleRelativeRva(*reinterpret_cast<void**>(geometry), gameplay);
+    }
+    H47VR_LOG_INFO("geom +0x398 self=%p (rva 0x%06lX) vtable=%p (rva 0x%06lX) "
+                   "target=%p (rva 0x%06lX, slot +0x398)",
+                   self, selfRva, vtable, vtableRva, method, methodRva);
+    H47VR_LOG_INFO("  geometry=%p (rva 0x%06lX, vtable rva 0x%06lX) "
+                   "aux=%p result=%p head=%p calls=%lu nonempty=%lu empty=%lu",
+                   geometry, geometryRva, geometryVtableRva, geometryAux, result,
+                   head, probe->calls, probe->nonempty, probe->empty);
+
+    if (first && vtable != nullptr && Readable(
+            reinterpret_cast<unsigned char*>(vtable) + 0x380,
+            0x28 * sizeof(void*))) {
+        for (int slot = 0x380; slot <= 0x3A4; slot += 4) {
+            void* target = *reinterpret_cast<void**>(
+                reinterpret_cast<unsigned char*>(vtable) + slot);
+            H47VR_LOG_INFO("  vtable +0x%03X -> %p (rva 0x%06lX)", slot, target,
+                           ModuleRelativeRva(target, gameplay));
+        }
+    }
 }
 
 // --- finding the camera by watching memory change ---------------------------
@@ -617,6 +799,30 @@ void RefreshCameraWrite() {
 // so it is toggled live; the state check is throttled because it is a file stat.
 unsigned int g_clip_all_ticks = 0;
 
+void __fastcall HookCameraProjection(
+    void* self, void* /*edx*/, double fov, double nearPlane, double farPlane,
+    int width, int height) {
+    if (g_real_camera_projection == nullptr) {
+        return;
+    }
+    const double desired = (std::max)(
+        g_wide_fov_override.load(std::memory_order_relaxed),
+        g_runtime_visibility_fov.load(std::memory_order_relaxed));
+    const bool useWide =
+        desired > fov + 1.0e-5 && CameraReadbackGameplayActive();
+    const double effective = useWide ? desired : fov;
+    static std::atomic<double> reported{0.0};
+    const double previous = reported.exchange(useWide ? effective : 0.0);
+    if (useWide && std::fabs(previous - effective) > 1.0e-6) {
+        H47VR_LOG_INFO("camera projection: engine culling FOV %.2f -> %.2f "
+                       "deg on %p, near=%.3f far=%.3f for %dx%d",
+                       fov * 57.29577951308232,
+                       effective * 57.29577951308232, self, nearPlane, farPlane,
+                       width, height);
+    }
+    g_real_camera_projection(self, effective, nearPlane, farPlane, width, height);
+}
+
 void ApplyClipAlwaysDraw() {
     if (g_clip_visible_byte == nullptr || g_clip_all_path.empty()) {
         return;
@@ -749,6 +955,10 @@ int DiffCandidate(Candidate& c) {
 }
 
 void ObserveCameraTransform(void* a1, void* a2, void* a3, void* a4) {
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    (void)a4;
     ++g_clip_calls;
 }
 
@@ -815,9 +1025,14 @@ void RefreshWideFovOverride() {
     g_wide_fov_clip_bypass = std::strstr(text, "clip=0") == nullptr;
 }
 
+double RequestedVisibilityFov() {
+    return (std::max)(g_wide_fov_override.load(),
+                      g_runtime_visibility_fov.load());
+}
+
 double DesiredVisibilityFov(void* view) {
     (void)view;
-    return g_wide_fov_override.load();
+    return CameraReadbackGameplayActive() ? RequestedVisibilityFov() : 0.0;
 }
 
 void ApplyVisibilityFov(void* view) {
@@ -943,6 +1158,17 @@ double CameraProbeWideFovRadians() {
     return g_wide_fov_override.load();
 }
 
+void CameraProbeSetRuntimeVisibilityFov(double radians) {
+    if (!(radians > 0.1 && radians < 2.8)) {
+        radians = 0.0;
+    }
+    const double previous = g_runtime_visibility_fov.exchange(radians);
+    if (std::fabs(previous - radians) > 1.0e-5) {
+        H47VR_LOG_INFO("visibility: runtime eye-union horizontal FOV %.2f deg",
+                       radians * 57.29577951308232);
+    }
+}
+
 bool CameraProbeInstall() {
     HMODULE gameplay = LoadedModule(L"HitmanDlc.dlc");
     if (gameplay == nullptr) {
@@ -959,8 +1185,11 @@ bool CameraProbeInstall() {
     g_render_view_object = nullptr;
     g_scene_fields_reported = false;
     g_candidate_count = 0;
+    g_geometry_list_probe_count = 0;
+    g_geometry_probe_open = false;
     g_found_count = 0;
     std::memset(g_candidates, 0, sizeof(g_candidates));
+    std::memset(g_geometry_list_probes, 0, sizeof(g_geometry_list_probes));
     std::memset(g_found, 0, sizeof(g_found));
 
     g_gate = JoinPath(mod::GameDirectory(), L"h47vr-camobj.txt");
@@ -997,6 +1226,35 @@ bool CameraProbeInstall() {
     }
     H47VR_LOG_INFO("hooked CamUpdate HitmanDlc.dlc rva 0x%06lX at %p",
                    kCameraUpdateRva, update);
+
+    h47vr_geometry_list_args_target =
+        reinterpret_cast<void*>(&ObserveGeometryListPostCall);
+    void* geometryList =
+        reinterpret_cast<char*>(gameplay) + kGeometryListPostCallRva;
+    if (!HookAddress(geometryList,
+                     reinterpret_cast<void*>(&h47vr_detour_geometry_list),
+                     &h47vr_geometry_list_trampoline)) {
+        H47VR_LOG_ERROR("camera probe: could not hook geometry +0x398 return "
+                        "HitmanDlc.dlc rva 0x%06lX at %p",
+                        kGeometryListPostCallRva, geometryList);
+    } else {
+        H47VR_LOG_INFO("hooked geometry +0x398 return HitmanDlc.dlc rva "
+                       "0x%06lX at %p",
+                       kGeometryListPostCallRva, geometryList);
+    }
+
+    void* cameraProjection =
+        reinterpret_cast<char*>(gameplay) + kCameraProjectionRva;
+    if (!HookAddress(cameraProjection,
+                     reinterpret_cast<void*>(&HookCameraProjection),
+                     reinterpret_cast<void**>(&g_real_camera_projection))) {
+        H47VR_LOG_ERROR("camera probe: could not hook camera projection "
+                        "HitmanDlc.dlc rva 0x%06lX at %p",
+                        kCameraProjectionRva, cameraProjection);
+    } else {
+        H47VR_LOG_INFO("hooked camera projection HitmanDlc.dlc rva 0x%06lX at %p",
+                       kCameraProjectionRva, cameraProjection);
+    }
 
     void* polygonClip = reinterpret_cast<char*>(gameplay) + kPolygonClipRva;
     if (!HookAddress(polygonClip,
@@ -1040,6 +1298,10 @@ void CameraProbeFrame(unsigned long frame) {
     RefreshCameraWrite();
     RefreshWideFovOverride();
     ApplyClipAlwaysDraw();
+    const bool geometryProbeOpen =
+        !g_gate.empty() &&
+        ::GetFileAttributesW(g_gate.c_str()) != INVALID_FILE_ATTRIBUTES;
+    g_geometry_probe_open.store(geometryProbeOpen, std::memory_order_relaxed);
     const bool wantSkipPolygonClip =
         CameraReadbackGameplayActive() &&
         g_wide_fov_override.load() > 0.0 &&
@@ -1056,8 +1318,7 @@ void CameraProbeFrame(unsigned long frame) {
     // Track, per frame, which dwords of the identified camera change. The
     // engine's own camera moves here on its own (the level opening sweeps it),
     // which is what makes this work without anyone touching the input devices.
-    if (g_gate.empty() ||
-        ::GetFileAttributesW(g_gate.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    if (!geometryProbeOpen) {
         return;
     }
     for (int i = 0; i < g_candidate_count; ++i) {
@@ -1116,6 +1377,15 @@ void CameraProbeReport(unsigned long frame) {
         return;
     }
     ReportRenderViewFields();
+    H47VR_LOG_INFO("geom probe: %d +0x398 object(s)",
+                   g_geometry_list_probe_count);
+    for (int i = 0; i < g_geometry_list_probe_count; ++i) {
+        const GeometryListProbe& probe = g_geometry_list_probes[i];
+        H47VR_LOG_INFO("  geom[%d] self=%p target=%p calls=%lu nonempty=%lu "
+                       "empty=%lu head=%p",
+                       i, probe.self, probe.method, probe.calls, probe.nonempty,
+                       probe.empty, probe.head);
+    }
     H47VR_LOG_INFO("frame %lu world probe: %d candidate(s), %lu cam updates, %lu clip calls",
                    frame, g_candidate_count, g_update_calls.load(), g_clip_calls.load());
     for (int i = 0; i < g_candidate_count; ++i) {

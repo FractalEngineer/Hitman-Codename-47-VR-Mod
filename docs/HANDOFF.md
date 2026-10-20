@@ -12,10 +12,10 @@ as the work**.
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
 Repo state: verify with `git status --short --branch`; this handoff predates its
-own commit. At the start of this session `origin/main` matched local `main` at
-`5baaa1d`, and this pass adds two local commits: the initial candidate fix and
-the follow-up that records the negative isolated test. Do not assume the working
-tree is still clean or that the new commits were pushed.
+own commit. This pass started from clean `main` at `43492d3`, synchronized with
+`origin/main`, and adds the engine-camera eye-union culling fix plus the
+corrected continuation notes. Do not assume the working tree is still clean or
+that the new commit was pushed.
 The game may or may not be running; it keeps rendering while the desktop is used,
 so a session is free to launch it and walk away.
 
@@ -140,63 +140,52 @@ The physical pass also produced these verified fixes:
   position and orientation, instead of a hard-coded 1.5 m world height. The user
   confirmed the theater height and rendering fix.
 
-**Open blocker: peripheral geometry is still culled, 2026-10-20.** The gray
-region around the training corridor is culling, not empty level space. The user
-confirmed this from the desktop view. An earlier attempt to blame the polygon
-clipper at `HitmanDlc.dlc+0x93670` was disproved by an isolated A/B test and must
-not be treated as a fix.
+**Peripheral culling fixed, 2026-10-20.** The real path is the engine camera's
+own projection/clipping state, not the downstream polygon clipper. The live
+gameplay camera object stores a 45-degree horizontal FOV at `+0x16E`;
+`FUN_0fd52040` (`HitmanDlc.dlc` RVA `0x92040`) consumes that value and rebuilds
+the camera's visibility state. The old `widefov.ps1` only changed the final GL
+projection until the engine camera was widened too, which is why the earlier
+grays persisted.
 
-What was verified:
+The implementation now:
 
-- Native training view reads 45 degrees horizontal in the renderer view object,
-  producing a 34.52-degree vertical `glFrustum`.
-- `tools/widefov.ps1` can replace the desktop SBS projection with 122 degrees
-  horizontal / 107.07 degrees vertical, reproducing the wide headset view.
-- With that **identical** wide projection, enabling the `0x93670` no-op path
-  changed the frame by `0.00` and both captures had the same 192 sampled colours.
-- Enabling the existing per-group `h47vr-clipall` byte under the same projection
-  also produced `0.00`.
-- Submitted vertices did not jump at the clip toggle: approximately 1,840 per
-  frame before and 1,825 immediately after. The face list was already reduced.
+- computes the symmetric horizontal FOV needed to cover both OpenXR eye
+  frusta, including each eye's X translation at the current near plane and the
+  vertical FOV/aspect relationship;
+- publishes that value from `stereo_renderer.cpp` before level setup, including
+  while menus and cinematics are in theater mode;
+- hooks `FUN_0fd52040` and passes the union FOV only while MouseConCam confirms
+  gameplay. The engine still invokes its own projection builder, so the
+  visibility pass, projection matrices and clipping state stay coherent;
+- keeps `h47vr-widefov.txt` as the desktop diagnostic and leaves the ruled-out
+  `0x93670` clipper bypass off.
 
-Therefore `0x93670` is downstream of the visibility decision or only performs
-geometric clipping on an already-culled group. The wide projection alone changes
-the image, which caused the earlier false-positive comparison. The mod keeps the
-clipper bypass as an explicit desktop diagnostic only; valid OpenXR poses no
-longer enable it.
+The per-geometry `+0x398` trace is also available behind `h47vr-camobj.txt`.
+Live capture resolved its target to `HitmanDlc.dlc` RVA `0x95AE0` and showed the
+stable scene pointer is not the per-geometry vtable. This trace is diagnostic;
+it is not required for the fix.
 
-The renderer view object is still useful for reproducing the wide final
-projection. `RenderOpenGL.dll` RVA `0x28A40` reads the horizontal FOV at
-`+0x16E`; `tools/widefov.ps1` exposes that without a headset. The next target is
-the face-list construction before `Clip`: `CamUpdate` calls the per-geometry
-object's virtual `+0x398`, then tests whether the returned list is non-empty.
-Tracing that path requires capturing the correct live object/vtable after a level
-load. The stable `CamUpdate` stack argument is not itself a valid vtable object;
-reading its first dword yields unwind/message helpers, so do not repeat that
-dead-end assumption.
+Verified:
 
-Experiments already tried and ruled out:
+- With the desktop control loaded before the level, 122-degree rendering filled
+  the gray corridor region with walls; sampled colours rose from 192 to 437.
+- Under SteamVR's null HMD, the runtime eye union was 116.94 degrees, and the
+  engine reported `67.40 -> 116.94` for its culling camera.
+- The final direct-stereo run produced 1,646 stereo pairs by frame 2400 and the
+  game remained responsive.
+- Direct eye-image readback was non-black: mean luminance `0.1892/0.1793` and
+  left/right difference `0.0399`.
 
-- Expanding the intercepted `glFrustum` by 4.25x did not affect the visible face
-  list. It only changed the pre-eye projection and damaged opening/cutscene
-  rendering, so the change was removed.
-- Sending `CameraFOV` through the console dispatcher returned 0 and did not fix
-  the view.
-- A direct call through the world property registry with a string value crashed
-  `EngineData.dll`; the probe was removed.
-- The serialized `CameraFOV` double is 67.4 at `HitmanDlc.dlc+0x30054` in this
-  build. A temporary live write to 110 did not remove the culling and left only
-  floor and lower walls visible. The game was closed, restoring the value.
-- `_ZLIST_CheckVisible` and `_ZGEOM_AdoptVisibility` are descriptor initializers,
-  not boolean cull predicates. Their helper functions at `0xFE0DE60`,
-  `0xFE19080`, `0xFE0E5D0`, and `0xFE0E1A0` are generic event/message handlers.
-  The polygon clipper at `0x93670` was tested under an identical wide projection
-  and did not recover geometry, so the real rejection still precedes it.
+Do not call `FUN_0fd52040` out of band from the frame/GL callback. A live test
+that did so crashed immediately after the first direct stereo frame. Let the
+engine call it normally and substitute the FOV in the hook.
 
-Do not repeat the projection overscan or property-registry calls. The useful
-chain is now `FUN_0fd56120` (`CamUpdate`) -> `FUN_0fd53c50` (`Clip`) ->
-`FUN_0fd53670` (polygon clipper). The old `FUN_0fe777f0` address was a no-op;
-`FUN_0fe7b730` is a bounds helper, not the visibility decision.
+Experiments ruled out: expanding the intercepted `glFrustum`, console
+`CameraFOV`, direct live writes to `0x30054`, the property-registry ABI probe,
+the `0x93670` clipper and `h47vr-clipall`, and forcing the broad-phase predicate
+at RVA `0xA1B60`. None recovered the peripheral geometry under an identical
+projection. The real fix is the engine-camera FOV hook above.
 
 The game's own level start is
 
@@ -441,7 +430,7 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-no-glprobe.txt` | shorthand for `none` |
 | `h47vr-glmatrix.txt` | while the file exists, log every changed `glLoadMatrixf` matrix |
 | `h47vr-stack.txt` | dump a few stacks at `glVertex3fv`, to re-find the engine's transform |
-| `h47vr-camobj.txt` | world probe: reports every camera candidate's `+0x106` triple, its `+0x0DA` basis, and the offsets the engine itself rewrites |
+| `h47vr-camobj.txt` | world probe: reports camera candidates plus the live `+0x398` per-geometry object/vtable, resolved target and returned face-list state |
 | `h47vr-camwrite.txt` | `yaw=<deg> pitch=<deg> [at=frame\|frustum] [index=<n>] [dry=1]` - rotates the identified camera object's basis in memory |
 
 Two things the injected rotation cannot do, both worth remembering:
@@ -547,6 +536,12 @@ Two things the injected rotation cannot do, both worth remembering:
   the no-focus input path. Physical Quest testing validated the 67 mm head-local
   eye separation and asymmetric FOV. Headset pitch and roll are applied at the GL
   vertex seam to keep the first-person pivot stable.
+- **Runtime eye-union engine visibility.** The renderer converts both eye FOVs
+  and eye translations into one symmetric horizontal engine-camera FOV and
+  publishes it before level setup. The `FUN_0fd52040` hook substitutes it while
+  gameplay is active. SteamVR null-HMD verification measured a 116.94-degree
+  union, widened the engine camera from 67.40 degrees, and kept direct stereo
+  alive with non-black per-eye readback.
 - **First-person MouseConCam position.** The supported build's follow-distance
   immediates are patched only while `h47vr-firstperson.txt` exists. A 3-unit
   target moved the live offset from 150 to 3 with the engine still performing
@@ -588,6 +583,9 @@ Modules relocate, so **always use RVAs**. Preferred bases in brackets.
 | `_ZCAMERA_BaseCamera` / `_MainCameraControl` / `_NewFollowCam2` / `_ScopeCamera` | `0x020E80` / `0x023940` / `0x029700` / `0x02D060` |
 | `_ZLIST_SortCameraControls` | `0x023430` |
 | World `CamUpdate` / `Clip` / polygon clipper | `0x96120` / `0x93C50` / `0x93670` |
+| Gameplay camera projection / visibility-state rebuild (`FOV` at arg 1) | `0x92040` |
+| Per-geometry `+0x398` method used by `CamUpdate` | `0x95AE0` |
+| Shared geometry bounds predicate (diagnostic; forcing it did not fix culling) | `0xA1B60` |
 | `_ZGEOM_AdoptVisibility` / `_ZLIST_CheckVisible` | `0x159050` / `0x14DE30` |
 | `_ZITEM_FireShot` | `0x0EBA30` |
 | `_ZGEOM_BasePickupTarget` / `_ZGEOM_ItemActivate` | `0x00D980` / `0x020240` |
@@ -863,17 +861,14 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 ## Immediate next steps
 
 Milestone 2 continues here. Native OpenXR eye rendering, physical 67 mm IPD,
-head tracking and theater placement are working. Peripheral culling remains the
-primary blocker.
+head tracking, theater placement and runtime eye-union culling are working. The
+remaining work is physical visual validation and first-person polish.
 
-1. **Find the pre-Clip face-list culling.** `tools/widefov.ps1 -Degrees 122
-   -NoClipBypass` reproduces the wide desktop view. The clipper at `0x93670` and
-   the `h47vr-clipall` byte have both been ruled out under that identical
-   projection. Trace the virtual `+0x398` call that `CamUpdate` makes before
-   testing whether the returned list is non-empty. Capture the correct live
-   geometry object and vtable after a level load; do not use the stable stack
-   argument as an object vtable. The expected outcome is that the gray
-   peripheral region fills with real corridor/room geometry.
+1. **Re-test the culling fix in the physical headset.** Run with the OpenXR gate
+   present before level setup, then confirm the corridor walls fill the
+   peripheral view in both eyes. The null-HMD run verified the union FOV reaches
+   the engine and direct stereo remains alive; lens-level confirmation is still
+   required.
 2. **Confirm head roll direction.** The final build flips the roll sign so the
    scene rotates opposite the headset roll. This has not been tested since the
    last sign change. Confirm left and right tilt, then adjust only the sign in

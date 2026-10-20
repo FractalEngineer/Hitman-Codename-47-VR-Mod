@@ -138,15 +138,15 @@ a deliberate test.
 
 ## What is not proven yet
 
-- The in-game backend reaches `xrGetSystem` on the game's WGL context; it still
-  needs a connected headset to validate eye positions, asymmetric tangents and
-  head tracking.
+- The physical headset still needs a final visual pass for lens correction,
+  convergence, comfort and subjective sharpness. The runtime-side eye positions,
+  asymmetric tangents and head tracking have already been exercised.
 - Physical Quest validation confirmed the 67 mm head-local IPD, head tracking
-  and theater placement. Peripheral geometry is still culled. The candidate
-  polygon clipper at `HitmanDlc.dlc+0x93670` was ruled out: under the same
-  122-degree desktop per-eye projection, enabling its no-op result produced a
-  0.00 image difference and the same 192 sampled colours. The real face-list
-  rejection occurs before `Clip` and remains the open target.
+  and theater placement. Peripheral culling is now addressed at the engine
+  camera, not the downstream polygon clipper: `HitmanDlc.dlc` RVA `0x92040`
+  rebuilds the camera's visibility state from its first FOV argument. The
+  renderer publishes the symmetric horizontal FOV covering both OpenXR eye
+  frusta, including per-eye translation at the near plane.
 - The null-HMD run proves native per-eye rendering and layer submission. The
   acquired 1512x1680 images have 24-bit depth attachments and receive the
   face-list replay directly. A centre readback measured mean luminance
@@ -154,8 +154,9 @@ a deliberate test.
   blit remains as the fallback path.
 - A physical Virtual Desktop/Quest session exercised the headset path: runtime
   eye positions, asymmetric FOV, tracking and theater placement were observed.
-  The remaining headset check is the new wide-visibility build, which has only
-  been desktop A/B tested so far.
+  The wide-visibility path has been verified on the desktop and under SteamVR's
+  null HMD. The remaining check is visual confirmation in the physical Quest:
+  peripheral culling, convergence and lens comfort.
 
 ## Presentation path
 

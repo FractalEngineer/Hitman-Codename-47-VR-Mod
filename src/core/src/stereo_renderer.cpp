@@ -11,6 +11,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
@@ -148,6 +149,61 @@ void RefreshStereo() {
     }
 }
 
+void PublishRuntimeVisibilityUnion(const OpenXrEyePose& pose,
+                                   float unitsPerMetre) {
+    if (!pose.valid || !pose.fovValid || !(unitsPerMetre > 1.0f)) {
+        CameraProbeSetRuntimeVisibilityFov(0.0);
+        return;
+    }
+
+    double nearUnits = GlPerspectiveNear();
+    if (!(nearUnits > 0.0)) {
+        // The supported training camera uses a 5-unit near plane at the
+        // current 100-units-per-metre calibration.
+        nearUnits = 5.0 * static_cast<double>(unitsPerMetre) / 100.0;
+    }
+
+    int width = 0;
+    int height = 0;
+    GlStereoSourceSize(&width, &height);
+    const double aspect =
+        width > 0 && height > 0 ? static_cast<double>(width) / height
+                                : 4.0 / 3.0;
+
+    double tanLeft = 0.0;
+    double tanRight = 0.0;
+    double tanUp = 0.0;
+    double tanDown = 0.0;
+    for (int eye = 0; eye < 2; ++eye) {
+        const double eyeX =
+            static_cast<double>(pose.eyeXMetres[eye]) * unitsPerMetre;
+        const double left =
+            std::tan(static_cast<double>(pose.fov[eye][0])) * nearUnits;
+        const double right =
+            std::tan(static_cast<double>(pose.fov[eye][1])) * nearUnits;
+        const double up =
+            std::tan(static_cast<double>(pose.fov[eye][2])) * nearUnits;
+        const double down =
+            std::tan(static_cast<double>(pose.fov[eye][3])) * nearUnits;
+        tanLeft = (std::min)(tanLeft, (eyeX + left) / nearUnits);
+        tanRight = (std::max)(tanRight, (eyeX + right) / nearUnits);
+        tanUp = (std::max)(tanUp, up / nearUnits);
+        tanDown = (std::min)(tanDown, down / nearUnits);
+    }
+
+    const double horizontal =
+        (std::max)(std::fabs(tanLeft), tanRight);
+    const double vertical =
+        (std::max)(tanUp, std::fabs(tanDown));
+    // The engine derives vertical FOV from horizontal FOV using the current
+    // desktop aspect. Pick the horizontal value that covers both axes.
+    const double requiredTangent =
+        (std::max)(horizontal, vertical * aspect);
+    const double horizontalFov =
+        2.0 * std::atan(requiredTangent);
+    CameraProbeSetRuntimeVisibilityFov(horizontalFov);
+}
+
 }  // namespace
 
 bool StereoRendererStart() {
@@ -164,6 +220,12 @@ bool StereoRendererStart() {
 
 void StereoRendererFrame(unsigned long frame) {
     RefreshStereo();
+    OpenXrEyePose runtimePose;
+    if (OpenXrPoseGet(&runtimePose)) {
+        PublishRuntimeVisibilityUnion(runtimePose, g_loaded_units_per_metre);
+    } else {
+        CameraProbeSetRuntimeVisibilityFov(0.0);
+    }
     const int mode = !g_active.load() ? 0 : (g_gameplay_active ? 2 : 1);
     if (mode != g_last_mode) {
         g_last_mode = mode;
@@ -233,6 +295,9 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
                            leftOffset, rightOffset,
                            runtimePose.fovValid ? "enabled" : "unavailable");
         }
+        PublishRuntimeVisibilityUnion(runtimePose, g_loaded_units_per_metre);
+    } else {
+        CameraProbeSetRuntimeVisibilityFov(0.0);
     }
 
     // Desktop diagnostic for the headset culling path: h47vr-widefov.txt gives

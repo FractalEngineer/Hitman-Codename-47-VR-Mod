@@ -2,11 +2,11 @@
 
 namespace h47vr {
 
-// Installs the camera/world-path probes and the desktop visibility experiment.
-// The engine clips face groups inside `HitmanDlc.dlc` RVA 0x93670 during the
-// `Clip` call from `CamUpdate`. The diagnostic can use that function's
-// "nothing needed clipping" result, but identical-projection A/B testing showed
-// no recovered geometry, so this is not a culling fix.
+// Installs the camera/world-path probes and the desktop visibility diagnostics.
+// Peripheral culling is fixed by substituting the runtime eye-union FOV in the
+// engine's camera projection builder (`HitmanDlc.dlc` RVA 0x92040). The later
+// polygon clipper at RVA 0x93670 is not the visibility rejection point and its
+// bypass remains diagnostic only.
 //
 // The same module samples the renderer's view object and can widen its
 // horizontal FOV for tests. Ordinary desktop play keeps the native path.
@@ -35,5 +35,9 @@ void CameraProbeOnFrustum();
 // Diagnostic horizontal FOV from <game>\h47vr-widefov.txt, or zero when the
 // desktop test gate is absent. The value is in radians.
 double CameraProbeWideFovRadians();
+
+// Publishes the symmetric horizontal FOV needed to cover the union of both
+// runtime eye frusta. Zero clears the runtime request.
+void CameraProbeSetRuntimeVisibilityFov(double radians);
 
 }  // namespace h47vr

@@ -1,9 +1,9 @@
 # Hook Map
 
-The Milestone 1 deliverable. Status as of 2026-10-18: the loading mechanism is
-implemented and proven in-process, and a Ghidra pass has located the gameplay
-entry points by name. No hook has been written or validated yet, and none of the
-located symbols has had its semantics confirmed in a debugger.
+The Milestone 1 deliverable. Status as of 2026-10-20: loading, keyboard-free
+level entry, MouseConCam readback, stereo replay and the OpenXR camera/visibility
+path are implemented and live-verified. The tables below retain the resolution
+and verification method for each address.
 
 This file is the single place where hook addresses and signatures are recorded.
 Nothing may be hooked from an address that is not listed here with its
@@ -42,7 +42,7 @@ needed anyway, notably everything inside `RenderOpenGL.dll`, which exports only
 | Hook engine (MinHook) | Implemented, initialised in-process |
 | Deferred gameplay hooking | Implemented via `LdrRegisterDllNotification`; fires on `HitmanDlc.dlc` load |
 | Presentation hook | `gdi32!SwapBuffers` installed and firing; frames are counted |
-| First camera hook | `_ZCAMERA_MouseConCam` installed at RVA `0x0264D0`; not yet observed firing |
+| First camera hook | `_ZCAMERA_MouseConCam` installed at RVA `0x0264D0`; observed firing in a loaded level |
 
 Measured in one run of the shipping build:
 
@@ -63,9 +63,10 @@ Two things that run machine-check the reverse engineering:
 - The `SwapBuffers` hook covers presentation, confirming the earlier conclusion
   that it lives in `gdi32`, not `opengl32`.
 
-`_ZCAMERA_MouseConCam` has not been seen firing: the process only reached the
-front end, and that entry point belongs to active gameplay. Confirming it needs
-a level loaded, which needs someone at the controls.
+`_ZCAMERA_MouseConCam` has since been observed in a loaded level. The keyboard-free
+`push:<level>` path reaches gameplay without manual input, and MouseConCam's
+per-frame update at RVA `0x26F20` supplies the live pose used by stereo and
+absolute aim.
 
 The proxy never loads the system library from `DllMain`. Export thunks resolve it
 on first call through `InitOnceExecuteOnce`.
@@ -201,11 +202,18 @@ Two consequences for Milestone 2, both from measurement rather than inference:
 - The fixed-function projection is intercepted in the proxy's GL seam. Runtime
   views now replace that scale with a per-eye `glFrustum` built from OpenXR's
   four FOV tangents and the engine's current near/far planes.
-- The gameplay face list is CPU-clipped by `HitmanDlc.dlc+0x93670` inside
-  `Clip` (`0x93C50`). Returning zero takes that function's existing no-op path,
-  but identical-projection A/B testing produced no visual or colour-count
-  change. It is therefore downstream of the real visibility rejection and is
-  retained only as a desktop diagnostic.
+- The engine rebuilds its gameplay camera projection and visibility state in
+  `HitmanDlc.dlc` `FUN_0fd52040` (`0x92040`). Its first stack argument is the
+  horizontal FOV. The mod hooks that function and substitutes the symmetric
+  horizontal FOV covering the union of both OpenXR eye frusta while gameplay is
+  active. This keeps the renderer projection, face-list rejection and clipping
+  in one engine-owned camera state.
+- The geometry `+0x398` path called by `CamUpdate` resolves to
+  `HitmanDlc.dlc` RVA `0x95AE0`; its post-call probe is gated by
+  `h47vr-camobj.txt`. Forcing the shared bounds predicate at `0xA1B60` did not
+  recover peripheral geometry. The downstream face-list clipper at `0x93670`
+  and the `h47vr-clipall` toggle were also ruled out under an identical wide
+  projection.
 
 `RenderOpenGL.dll` loaded at its preferred base `0x0FB70000` in that run, while
 `HitmanDlc.dlc` relocated. Both cases occur, which is why every address in this

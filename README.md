@@ -18,11 +18,13 @@ update. A gated OpenXR backend now feeds runtime eye positions, asymmetric FOV
 tangents and predicted head orientation into that path. Gameplay now renders
 directly into depth-complete OpenXR eye swapchains under the SteamVR null HMD;
 physical Quest testing has validated the 67 mm IPD, head tracking and theater
-placement. Peripheral geometry is still culled: an isolated 122-degree desktop
-A/B test ruled out the candidate polygon clipper because enabling its bypass
-under the identical projection produced no image change. The remaining target
-is the face-list construction before `Clip`. Menus and cinematics use theater
-mode, with immersive stereo reserved for gameplay. Gameplay can now move
+placement. Peripheral culling is addressed at the engine camera: the runtime
+eye union is passed into the engine's own projection/visibility builder before
+gameplay, keeping the face list, clipping and final stereo projection coherent.
+Desktop 122-degree rendering now fills the corridor walls, and a SteamVR
+null-HMD run widened the culling camera from 67.4 to 116.94 degrees while direct
+stereo stayed non-black and responsive. A physical-headset visual retest remains.
+Menus and cinematics use theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head hiding and final eye-height calibration
 remain. The desktop presentation path now switches between one-pass theater mode

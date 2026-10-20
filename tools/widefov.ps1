@@ -4,8 +4,9 @@
     Exercise the wide-FOV projection and candidate culling paths without a headset.
 
 .DESCRIPTION
-    Writes <game>\h47vr-widefov.txt. During gameplay the desktop SBS renderer
-    builds a symmetric per-eye projection at the requested horizontal FOV.
+    Writes <game>\h47vr-widefov.txt. During gameplay the FOV is passed into both
+    the engine's own camera projection/visibility builder and the desktop SBS
+    renderer, so the diagnostic exercises culling and final rendering together.
     -NoClipBypass keeps the native polygon path; without it, the candidate
     0x93670 bypass is also enabled for comparison. The bypass is unproven and
     this is a diagnostic, not a normal play mode.

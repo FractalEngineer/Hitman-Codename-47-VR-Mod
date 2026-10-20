@@ -802,6 +802,10 @@ void StereoSourceSizeImpl(int* width, int* height) {
     }
 }
 
+double PerspectiveNearImpl() {
+    return g_perspective_near.load();
+}
+
 bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians,
                         float sceneRollRadians,
                         float scenePitchRadians,
@@ -1138,6 +1142,7 @@ void GlProbePublish() {
     g_gl_stereo_available = &StereoAvailableImpl;
     g_gl_stereo_perspective = &StereoPerspectiveImpl;
     g_gl_stereo_source_size = &StereoSourceSizeImpl;
+    g_gl_perspective_near = &PerspectiveNearImpl;
     g_gl_stereo_begin_eye = &StereoBeginEyeImpl;
     g_gl_stereo_end_eye = &StereoEndEyeImpl;
 }

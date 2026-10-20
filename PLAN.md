@@ -310,17 +310,18 @@ the "camera hook" the gate asked for is not needed for it.
       pairs, approximately 60 FPS, and a 256x256 centre readback with mean luminance 0.1713/0.1629
       and a 0.0446 left/right difference, proving non-black, non-identical eye images. A physical
       headset pass and visual inspection remain
-- [~] **Expand engine visibility to cover the XR FOV, 2026-10-20 - still open.** The candidate
-      polygon clipper is `HitmanDlc.dlc+0x93670`, called by `Clip` (`RVA 0x93C50`) during
-      `CamUpdate`, but it is **not yet the proven culling point**. With the same 122-degree
-      synthetic per-eye projection, enabling versus disabling its no-op return produced a `0.00`
-      image difference and identical 192-colour counts. The per-group `h47vr-clipall` byte also
-      produced `0.00`. Submitted vertices did not jump at the toggle (~1,840/frame before,
-      ~1,825/frame after), so the face list was already reduced before this clipper. The 122-degree
-      projection alone does change the frame, which explains the earlier false-positive A/B.
-      The remaining task is to find the face-list construction/culling decision before `Clip`.
-      A full-screen gray region around the training corridor is still visible evidence of the
-      unresolved blocker
+- [x] **Expand engine visibility to cover the XR FOV, 2026-10-20.** The engine rebuilds its own
+      camera visibility state in `HitmanDlc.dlc` `FUN_0fd52040` (`RVA 0x92040`); its first stack
+      argument is the horizontal FOV. `stereo_renderer.cpp` now computes the symmetric horizontal
+      FOV covering both OpenXR eye frusta, including eye X at the near plane and the vertical
+      FOV/aspect relationship, and publishes it before level setup. The `0x92040` hook substitutes
+      that FOV while gameplay is active, so projection, culling and clipping all use the same
+      engine-owned camera state. The ruled-out polygon clipper and clip-all paths stay disabled.
+      Desktop 122-degree rendering changed from 192 to 437 sampled colours and filled the corridor
+      walls. Under SteamVR's null HMD the runtime union was 116.94 degrees, the engine reported
+      `67.40 -> 116.94`, 1,646 stereo pairs completed by frame 2400, direct readback was non-black
+      (`0.1892/0.1793` mean, `0.0399` left/right difference), and the process stayed responsive.
+      Physical-headset visual confirmation remains with the other Quest checks
 - [x] Prevent the second eye pass from repeating animation, scripts, audio, particles or weapon
       events: only the face-list draw consumer is replayed. The training capture remained at
       60 FPS and the gameplay frame count advanced at the normal cadence
@@ -380,11 +381,13 @@ was stable at -0.0332/+0.0332 m for the user's 67 mm IPD. Zeroing MouseConCam's
 sway oscillators removed most shaking; a faster yaw correction removed most
 fast-turn lag; moving headset pitch out of MouseConCam and into the GL vertex
 path fixed the slow floor sink. Theater height was corrected and confirmed.
-The physical run still showed mostly floor and lower walls with black peripheral
-wedges. A desktop 122-degree projection reproduces the wide view, but bypassing
-the candidate polygon clipper under that identical projection produced no image
-change. The peripheral culling blocker is therefore still open; the next target
-is the face-list construction before `Clip`.
+The physical run still showed peripheral black wedges, which led to the clipping
+investigation. The fix landed on 2026-10-20: the engine's camera projection
+builder (`HitmanDlc.dlc` RVA `0x92040`) now receives the symmetric FOV covering
+the union of both OpenXR eyes. Desktop 122-degree rendering filled the corridor
+walls, and a SteamVR null-HMD run widened the engine camera from 67.40 to 116.94
+degrees while direct stereo and per-eye readback remained valid. A physical
+headset retest is still required to confirm the peripheral image visually.
 
 Gate: positional parallax, stable world scale, unchanged simulation speed in training.
 

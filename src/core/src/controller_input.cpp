@@ -5,6 +5,7 @@
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
 #include "h47vr/paths.hpp"
+#include "h47vr/renderer_input.hpp"
 #include "h47vr/symbols.hpp"
 #include "h47vr/window_keepalive.hpp"
 
@@ -463,6 +464,12 @@ void PostMenuPointerMove() {
         !ClientPointFromRender(g_menu_pointer_x, g_menu_pointer_y, &position)) {
         return;
     }
+    const int x = static_cast<short>(LOWORD(position));
+    const int y = static_cast<short>(HIWORD(position));
+    if (RendererInputMove(x, y)) {
+        ++g_menu_moves;
+        return;
+    }
     if (::PostMessageW(window, WM_MOUSEMOVE, 0, position)) {
         ++g_menu_moves;
     }
@@ -475,7 +482,12 @@ void PostMenuPointerClick() {
         !ClientPointFromRender(g_menu_pointer_x, g_menu_pointer_y, &position)) {
         return;
     }
-    if (::PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON, position)) {
+    const int x = static_cast<short>(LOWORD(position));
+    const int y = static_cast<short>(HIWORD(position));
+    const bool posted = RendererInputButton(true, x, y) ||
+                        ::PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON,
+                                       position) != FALSE;
+    if (posted) {
         g_menu_click_held = true;
         g_menu_click_release_tick = ::GetTickCount64() + 80;
         H47VR_LOG_INFO("controller input: menu pointer click #%lu at %.0f,%.0f",
@@ -610,7 +622,11 @@ void ApplyButtonActions(const ControllerInputSnapshot& state) {
         if (window != nullptr &&
             ClientPointFromRender(g_menu_pointer_x, g_menu_pointer_y,
                                   &position)) {
-            ::PostMessageW(window, WM_LBUTTONUP, 0, position);
+            const int x = static_cast<short>(LOWORD(position));
+            const int y = static_cast<short>(HIWORD(position));
+            if (!RendererInputButton(false, x, y)) {
+                ::PostMessageW(window, WM_LBUTTONUP, 0, position);
+            }
         }
         g_menu_click_held = false;
     }
@@ -665,7 +681,8 @@ bool ControllerInputStart() {
     g_test_path =
         JoinPath(mod::GameDirectory(), L"h47vr-controller-test.txt");
     H47VR_LOG_INFO("controller input: ready - OpenXR sticks map to movement "
-                   "and native turning; menus map to arrow keys");
+                   "and native turning; menus use the right-stick pointer with "
+                   "left-stick arrows as fallback");
     ControllerInputRearm();
     return true;
 }

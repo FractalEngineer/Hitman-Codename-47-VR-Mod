@@ -25,6 +25,12 @@
     engine camera after MouseConCam updates it, so collision, visibility and the
     pitch pivot use the same corrected position.
 
+.PARAMETER HeadClipNear
+    Gameplay-only near-plane distance in game units. The default 24-unit cut
+    removes the player's head geometry around the first-person camera while
+    leaving the body and shadow passes intact. The normal near plane returns as
+    soon as a cinematic or scripted camera moves the head out of range.
+
 .PARAMETER Ipd
     Legacy override in raw game units. Use only for calibration experiments.
 
@@ -36,6 +42,7 @@ param(
     [double]$IpdMillimeters = 67.0,
     [double]$GameUnitsPerMetre = 100.0,
     [double]$CameraLower = 0.0,
+    [double]$HeadClipNear = 24.0,
     [double]$Ipd,
     [switch]$Off,
     [string]$GameDir
@@ -77,11 +84,14 @@ if ($IpdMillimeters -le 0 -or $IpdMillimeters -gt 1000) {
 if ($CameraLower -lt -100 -or $CameraLower -gt 100) {
     throw 'CameraLower must be between -100 and 100 game units.'
 }
+if ($HeadClipNear -lt 0 -or $HeadClipNear -gt 1000) {
+    throw 'HeadClipNear must be between 0 and 1000 game units.'
+}
 $request = if ($PSBoundParameters.ContainsKey('Ipd')) {
     "ipd={0}" -f $Ipd
 } else {
-    "ipd_mm={0} units_per_m={1} camera_lower={2}" -f `
-        $IpdMillimeters, $GameUnitsPerMetre, $CameraLower
+    "ipd_mm={0} units_per_m={1} camera_lower={2} head_near={3}" -f `
+        $IpdMillimeters, $GameUnitsPerMetre, $CameraLower, $HeadClipNear
 }
 Set-Content -LiteralPath $control -Value $request -Encoding ascii
 Write-Host ("stereo on: {0}" -f $control)

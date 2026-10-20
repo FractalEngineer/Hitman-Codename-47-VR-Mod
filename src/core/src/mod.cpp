@@ -13,6 +13,7 @@
 #include "h47vr/openxr_pose.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/renderer_probe.hpp"
+#include "h47vr/renderer_input.hpp"
 #include "h47vr/scene_probe.hpp"
 #include "h47vr/stereo_renderer.hpp"
 #include "h47vr/symbols.hpp"
@@ -300,6 +301,7 @@ void ApplyReinstall() {
         FirstPersonCameraRearm();
     }
     if (renderer != nullptr) {
+        RendererInputRearm();
         RendererProbeReset();
         RendererProbeInstall();
         LookDriverRearm();
@@ -385,6 +387,7 @@ bool Initialize(const char* trigger) {
     // window exists so it wins the race to subclass it.
     WindowKeepaliveStart();
     InstallRendererHooks();
+    RendererInputStart();
     InstallConsoleCapture();
     // The GL seam has to be in place before the renderer draws, so it is
     // installed here rather than at the first presented frame. The filter file

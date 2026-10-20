@@ -38,12 +38,15 @@ world size by about 10%. Straight-ahead rendering is coherent, but the legacy
 GL-seam pitch path still loses the lower half of the image under a 45-degree
 pitch. The active native pitch feed produces coherent upward and downward
 mirrored views. Eye-height calibration now writes the real MouseConCam parent
-camera position instead of shifting final vertices. Final neck/eye alignment
-and occasional camera tracking jerks remain open.
+camera position instead of shifting final vertices. Gameplay stereo uses a
+configurable near cut (`head_near=24`) to remove the head while preserving the
+body and its shadow passes; the head returns automatically when a forced camera
+moves away. Final neck/eye alignment and occasional camera tracking jerks remain
+open.
 Menus and cinematics use theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
-engine's own MouseConCam transform; head hiding and final eye-height calibration
-remain. The desktop presentation path now switches between one-pass theater mode
+engine's own MouseConCam transform; head near-cut tuning and final eye-height
+calibration remain. The desktop presentation path now switches between one-pass theater mode
 and gameplay stereo from live MouseConCam freshness. The OpenXR backend now
 submits theater quads and native per-eye gameplay projection layers through real
 GL swapchains.

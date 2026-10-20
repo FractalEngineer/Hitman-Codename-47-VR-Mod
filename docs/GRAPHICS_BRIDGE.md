@@ -214,15 +214,20 @@ the predicted head pose, and `look_driver.cpp` adds the closed-loop yaw delta to
 Controller smooth/snap turning uses the same accumulator. Controller movement
 uses the engine's per-key state; ESC is posted as a held window key pair because
 a zero-duration pair is ignored. Menus additionally use the right stick as an
-absolute pointer, with A or either trigger posting a held left click.
+absolute pointer. The mod captures RenderOpenGL's window-input object and calls
+its native move/down/up slots directly, because posted mouse messages are gated
+off while MouseConCam owns input.
 
 The live controller profile now uses corrected movement axes, 180-degree/second
 smooth turn, directional stick-click snap, menu-button ESC, trigger fire,
 A/B/X/Y actions, grip actions and left-stick-click run. The current world scale
 is a provisional 110 units/metre. Eye-height calibration now lowers the real
 MouseConCam parent camera position after each engine update and removes the
-offset's vertical pitch component from that position. Final neck/eye alignment
-and occasional camera jerks are still under investigation.
+offset's vertical pitch component from that position. Gameplay stereo applies a
+configurable near-plane cut (`head_near`) to remove the head while preserving
+the body and shadow passes; the normal near plane returns in theater/forced
+camera states. Final neck/eye alignment and occasional camera jerks are still
+under investigation.
 
 ## Engine constraints to respect
 

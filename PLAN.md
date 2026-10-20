@@ -361,8 +361,9 @@ the "camera hook" the gate asked for is not needed for it.
       first-person work is pitch-dependent visibility, head hiding, eye height and near-plane
       calibration
 - [~] Hide the player's head and fully separate gameplay camera position from headset orientation.
-      The camera can now sit in the head, but head/body hiding, eye-height calibration and the
-      final camera/head split remain
+      The camera can now sit in the head, and gameplay-only near clipping removes the head while
+      leaving the body intact. The cut distance is configurable as `head_near`; final eye-height and
+      forced-camera validation remain
 - [~] Use theater mode for menus, intro cinematics and in-game cinematics; switch to immersive
       stereo only when MouseConCam confirms gameplay. The desktop renderer now treats a MouseConCam
       update as fresh for 250 ms: stale/menu/scripted-camera states draw one theater pass, while
@@ -391,8 +392,10 @@ the "camera hook" the gate asked for is not needed for it.
       now snaps only when the stick is deflected left or right. The final live movement mapping is
       negative X = left (`A`), positive X = right (`D`), negative Y = back (`S`) and positive Y =
       forward (`W`). Menus use the right stick as a native pointer with A/trigger as a held left
-      click; left stick arrows remain a fallback and B goes back. Camera height and random tracking
-      jerks remain open
+      click; left stick arrows remain a fallback and B goes back. A captured RenderOpenGL input
+      object now lets the controller call the renderer's native move/down/up slots directly, bypassing
+      the window-procedure gate that discarded posted menu messages. Camera height and random
+      tracking jerks remain open
 - [~] **Move eye-height calibration to the real engine camera, 2026-10-21.** `camera_lower` had
       previously translated vertices at the GL seam, which changed the image but not the camera or
       pitch pivot. The MouseConCam update now resolves its parent camera object (`self+0x08`) and
@@ -402,6 +405,13 @@ the "camera hook" the gate asked for is not needed for it.
       from approximately Y `-305.9` to `-325.5` with `camera_lower=20`. A failed experiment that
       collapsed the follow distance to `0.25` caused a half-floor spawn and has been reverted to
       the usable `3.0`-unit setting. Final neck/eye alignment still needs the user's live check
+- [~] **Dynamic first-person head near-cut, 2026-10-21.** Gameplay stereo now raises only the
+      submitted eye near plane to `head_near=24` game units while first-person mode and live
+      MouseConCam gameplay are active. This cuts the player's head geometry around the camera without
+      hiding the body or its shadow passes. Theater and forced cameras render normally, and the head
+      returns automatically once it is farther than the cut distance. Runtime and fallback projection
+      paths both honor the cut. Build and control-state verification pass; physical-headset visual
+      confirmation remains
 - [~] **Live headset integration pass, 2026-10-21.** The user confirmed that native engine pitch
       removes the previous culling loss. VirtualDesktopXR is presenting direct 2412x2596 sRGB eye
       images with the 67 mm profile. A provisional `units_per_m=110` reduces the perceived world

@@ -161,6 +161,7 @@ headers; the modules are relocatable, so never hard-code the VA.
 | 5d | Interface singleton for the dispatcher | `Globals.dll` | `?g_pSysInterface@@3PAVZSysInterface@@A` | `0x00003010` | located (singleton pointer) |
 | 5e | Native look accumulator | `Globals.dll` -> interface | `g_pSysInterface + 0xA95/+0xA99` | - | direct OpenXR yaw feed verified |
 | 5f | Per-key input state records | `Globals.dll` -> interface | `+0xAB6` edge / `+0xAB7` down, stride 15 | - | controller movement/menu bridge |
+| 5g | Renderer window input object | `RenderOpenGL.dll` | (not exported) | `0x0002A050` | hooked; object captured in ECX; native move/down/up slots `+0x194/+0x178/+0x17C` |
 | 6 | Weapon fire | `HitmanDlc.dlc` | `_ZITEM_FireShot` | `0x000EBA30` | located, semantics unconfirmed |
 | 7 | Interaction / pickup | `HitmanDlc.dlc` | `_ZGEOM_BasePickupTarget` | `0x0000D980` | located |
 | 7a | Interaction activate | `HitmanDlc.dlc` | `_ZGEOM_ItemActivate` | `0x00020240` | located |
@@ -191,13 +192,23 @@ pitch component is removed there so native pitch is available to the visibility
 pass without moving the eye up or down along the follow sphere. This replaced
 the older GL-seam vertical shift.
 
+### First-person head near-cut
+
+Gameplay stereo raises the submitted eye projection's near plane through
+`head_near` while first-person mode is active. At 110 units/metre the default
+24-unit cut is about 22 cm, which removes head geometry around the eye while the
+body and shadow passes remain. Theater mode does not use the cut, and a scripted
+camera that moves the head beyond the cut restores it without a separate
+visibility write. Both the OpenXR asymmetric projection and the desktop SBS
+fallback honor the same near value.
+
 ### OpenXR controller mapping
 
 The live Quest profile uses `units_per_m=110` provisionally and 180-degree/second
 smooth turning. Left-stick axes are inverted from the initial mapping because
-the engine's forward/left state is opposite OpenXR's initial signs. Movement and
-menu directions post held `WM_KEYDOWN`/`WM_KEYUP` messages; face buttons are
-100 ms taps. The current mapping is:
+the engine's forward/left state is opposite OpenXR's initial signs. Movement
+posts held `WM_KEYDOWN`/`WM_KEYUP` messages; face buttons are 100 ms taps. The
+current mapping is:
 
 | OpenXR input | Engine action |
 | --- | --- |
@@ -216,9 +227,12 @@ menu directions post held `WM_KEYDOWN`/`WM_KEYUP` messages; face buttons are
 
 The ESC startup guard ignores a button already held during the first four
 seconds of launch. This prevents the OpenXR session-entry press from closing the
-intro. In non-gameplay screens the right stick posts absolute `WM_MOUSEMOVE`
-coordinates and A or either trigger posts an 80 ms held left click; left-stick
-arrows remain a fallback. Full physical menu traversal still needs a check.
+intro. In non-gameplay screens the right stick moves an absolute pointer and A
+or either trigger performs an 80 ms left click. `renderer_input.cpp` captures the
+RenderOpenGL window-input object and invokes its native `+0x194`, `+0x178` and
+`+0x17C` handlers directly, because the window procedure drops posted mouse
+messages when renderer `+0x81` is set. Left-stick arrows remain a fallback. Full
+physical menu traversal still needs a check.
 
 ### Renderer candidates
 

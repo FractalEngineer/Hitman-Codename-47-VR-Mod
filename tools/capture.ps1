@@ -71,7 +71,7 @@ public class H47Capture {
         EnumWindows(delegate(IntPtr h, IntPtr value) {
             uint owner;
             GetWindowThreadProcessId(h, out owner);
-            if (owner != processId || !IsWindowVisible(h)) { return true; }
+            if (owner != processId) { return true; }
             RECT r;
             if (!GetClientRect(h, out r)) { return true; }
             long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);

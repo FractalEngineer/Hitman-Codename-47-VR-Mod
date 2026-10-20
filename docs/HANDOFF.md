@@ -12,10 +12,10 @@ as the work**.
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
 Repo state: verify with `git status --short --branch`; this handoff predates its
-own commit. This pass started from `main` at `95687d2`, synchronized with
-`origin/main`, and records the native camera-origin correction, menu pointer and
-the rollback of the failed follow-distance experiment. Do not assume the working
-tree is still clean or that the new commit was pushed.
+own commit. This pass started from `main` at `b010913`, synchronized with
+`origin/main`, and adds the gameplay-only head near-cut plus native RenderOpenGL
+menu input. Do not assume the working tree is still clean or that the new commit
+was pushed.
 The game may or may not be running; it keeps rendering while the desktop is used,
 so a session is free to launch it and walk away.
 
@@ -211,7 +211,7 @@ sampled hold agreed within 0.07 degrees, so the remaining head-follow complaint
 is likely transient/jitter rather than static gain error. Native pitch uses a
 0.35-degree deadband.
 
-**Native camera origin and menu pointer, 2026-10-21.** The earlier
+**Native camera origin, head near-cut and menu input, 2026-10-21.** The earlier
 `camera_lower` control only shifted eye-space vertices at the GL seam, so it
 visibly lowered the picture while leaving the engine camera and pitch pivot
 unchanged. The MouseConCam hook now resolves the parent camera object
@@ -229,12 +229,19 @@ distance of `0.8` did not give a useful pivot change, and `0.25` spawned the
 player halfway through the floor; both experiments are reverted and the live
 profile is back at `distance=3.0`.
 
-The front-end pointer is now native rather than arrow-key guessing. The right
-stick integrates a render-space position (720 px/s, mapped to the game client)
-and posts `WM_MOUSEMOVE`; A or either trigger holds a left mouse button for
-80 ms. Headless verification on the front end reported an `800x600` pointer,
-multiple moves, and click words at the expected coordinates. Full physical
-menu traversal and final neck-height feel still need a live check.
+`head_near` is a gameplay-only near-plane cut. With the default 24 game units,
+first-person stereo removes head geometry around the eye while leaving the body
+and its shadow passes intact. The normal projection returns in theater mode, and
+a scripted camera moving the head beyond 24 units makes it visible automatically.
+The cut applies to both runtime asymmetric projections and the desktop fallback.
+
+The front-end pointer no longer relies on posted window messages. The mod hooks
+RenderOpenGL's window procedure at RVA `0x2A050`, captures its input object, and
+calls the native mouse-move and left-down/up vtable slots directly. This bypasses
+the `+0x81` gate that silently discarded posted messages. The right stick
+integrates an absolute position and A or either trigger performs an 80 ms click;
+the message path remains only as fallback. Headless logs confirm native move and
+button dispatch.
 
 **Pitch-dependent culling is the current blocker, 2026-10-20.** Straight-ahead
 XR rendering matches the last good engine-FOV behavior and retains sRGB. Looking
@@ -1032,9 +1039,9 @@ removes the culling loss. The next work is camera positioning and motion quality
 4. **Calibrate the final world scale.** The current headset test uses a
    provisional 110 units/metre with the user's 67 mm IPD; confirm it against a
    physical level landmark.
-5. **Resume first-person polish.** Hide the player's head while retaining the
-   body for shadows/reflections, calibrate eye height and near clipping, and
-   validate pitch/roll through crouching, leaning and scripted camera changes.
+5. **Tune the first-person near-cut.** Confirm that `head_near=24` removes the
+   whole head without clipping the body in practice, then validate the automatic
+   restore through crouching, leaning, death animations and scripted cameras.
 6. **Use the XR mirror for before/after work.** Left/right/side-by-side output
    and BMP capture preserve the submitted runtime image.
 7. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so

@@ -14,6 +14,7 @@ add_library(h47vr_core STATIC
     src/symbols.cpp
     src/hooks.cpp
     src/renderer_probe.cpp
+    src/renderer_input.cpp
     src/scene_probe.cpp
     src/openxr_pose.cpp
     src/mod.cpp)

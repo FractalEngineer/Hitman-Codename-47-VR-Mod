@@ -809,6 +809,7 @@ double PerspectiveNearImpl() {
 bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians,
                         float sceneRollRadians,
                         float scenePitchRadians,
+                        float nearClipUnits,
                         unsigned int framebuffer, int width, int height) {
     if (!g_perspective.load()) {
         return false;
@@ -847,7 +848,11 @@ bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians,
     g_real_push_matrix();
 
     bool asymmetric = false;
-    const double nearPlane = g_perspective_near.load();
+    const double nativeNear = g_perspective_near.load();
+    const double nearPlane =
+        std::isfinite(nearClipUnits) && nearClipUnits > 0.0f
+            ? static_cast<double>(nearClipUnits)
+            : nativeNear;
     const double farPlane = g_perspective_far.load();
     if (fovRadians != nullptr && nearPlane > 0.0 && farPlane > nearPlane &&
         fovRadians[0] < 0.0f && fovRadians[1] > 0.0f &&
@@ -870,6 +875,15 @@ bool StereoBeginEyeImpl(int eye, float eyeOffset, const float* fovRadians,
         // Desktop diagnostic: each eye gets half of the original viewport.
         // Scaling projection X by 0.5 keeps the vertical FOV and gives each
         // half the correct aspect.
+        if (nearClipUnits > 0.0f && g_has_last_frustum &&
+            nearPlane < farPlane) {
+            const double scale = nearPlane / nativeNear;
+            g_real_load_identity();
+            g_real_frustum(g_last_frustum[0] * scale,
+                           g_last_frustum[1] * scale,
+                           g_last_frustum[2] * scale,
+                           g_last_frustum[3] * scale, nearPlane, farPlane);
+        }
         const float scaleX[16] = {
             0.5f, 0.0f, 0.0f, 0.0f,
             0.0f, 1.0f, 0.0f, 0.0f,

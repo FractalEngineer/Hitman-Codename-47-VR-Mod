@@ -26,7 +26,7 @@ constexpr float kDefaultIpdMillimetres = 67.0f;
 constexpr float kDefaultGameUnitsPerMetre = 100.0f;
 constexpr float kDefaultCameraLowerUnits = 0.0f;
 constexpr float kDefaultCameraForwardUnits = 0.0f;
-constexpr float kDefaultHeadClipNearUnits = 0.0f;
+constexpr float kDefaultHeadClipNearUnits = 11.0f;
 
 std::wstring g_control_path;
 std::atomic<bool> g_active{false};

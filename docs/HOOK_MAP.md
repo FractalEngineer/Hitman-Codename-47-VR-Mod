@@ -199,25 +199,25 @@ pitch. This replaced the older GL-seam vertical shift.
 
 Gameplay stereo raises the submitted eye projection's near plane through
 `head_near` while first-person mode is active. At 110 units/metre the default
-24-unit cut is about 22 cm, which removes head geometry around the eye while the
-body and shadow passes remain. Theater mode does not use the cut, and a scripted
-camera that moves the head beyond the cut restores it without a separate
-visibility write. Both the OpenXR asymmetric projection and the desktop SBS
-fallback honor the same near value.
+11-unit cut is about 10 cm, the smallest tested value that removes the visible
+head fragment while the body and shadow passes remain. Theater mode does not
+use the cut, and a scripted camera that moves the head beyond the cut restores
+it without a separate visibility write. Both the OpenXR asymmetric projection
+and the desktop SBS fallback honor the same near value.
 
 ### OpenXR controller mapping
 
 The live Quest profile uses `units_per_m=110` provisionally and 180-degree/second
 smooth turning. Left-stick axes are inverted from the initial mapping because
 the engine's forward/left state is opposite OpenXR's initial signs. Movement
-posts held `WM_KEYDOWN`/`WM_KEYUP` messages; face buttons are 100 ms taps. The
+is written into the engine's native per-key state; face buttons are 100 ms taps. The
 current mapping is:
 
 | OpenXR input | Engine action |
 | --- | --- |
 | left thumbstick | W/S/A/D movement, with corrected signs |
 | left thumbstick click | Run (left Shift) |
-| right thumbstick | Native smooth yaw |
+| right thumbstick | Native smooth yaw in gameplay; native pointer in menus |
 | right thumbstick click | Directional 30-degree snap when deflected |
 | left menu | ESC/back |
 | left/right trigger | Fire (left mouse button) |
@@ -230,20 +230,20 @@ current mapping is:
 
 The ESC startup guard ignores a button already held during the first four
 seconds of launch. This prevents the OpenXR session-entry press from closing the
-intro. In non-gameplay screens the right stick moves an absolute pointer and A
-or either trigger performs an 80 ms left click. `renderer_input.cpp` captures the
-RenderOpenGL window-input object and exposes its native move/down/up and key
-slots. Menu keys are delivered synchronously through the window procedure, so
-they survive background focus. Headless traversal opened profile selection from
-the main menu, accepted the profile, reached level selection and skipped
-gameplay with the menu-button ESC. Right-stick pointer selection and left-stick
-arrow selection still need an interactive check.
+intro. In non-gameplay screens the right stick moves the engine's internal
+pointer and A or either trigger performs an 80 ms native click after a 50 ms
+settle. `renderer_input.cpp` captures the RenderOpenGL window-input object and
+exposes its native move/down/up and key slots. The old posted-window mouse
+fallback has been removed, so controller navigation cannot move the desktop
+cursor. Controller A was verified from profile selection to the level list;
+right-stick pointer selection and left-stick arrow selection still need a clean
+interactive check.
 
-The cursor-warp hook now suppresses `SetCursorPos` only during synchronous
-mod-generated mouse messages. Real hardware mouse movement is no longer denied
-the engine's normal recenter behavior. Native head yaw still shares the engine
-look accumulator, so physical mouse look and active headset look should not be
-used simultaneously during gameplay.
+While tracked head pose is valid, physical mouse movement is ignored during
+gameplay so it cannot fight the native head-yaw accumulator. The cursor-warp
+hook swallows the engine mouse handler's `SetCursorPos` throughout a tracked
+session, including menus, so it cannot pull the desktop pointer into the game.
+Desktop-only sessions retain the normal engine recenter behavior.
 
 ### Renderer candidates
 

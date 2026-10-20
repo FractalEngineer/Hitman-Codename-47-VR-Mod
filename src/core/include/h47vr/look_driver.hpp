@@ -44,9 +44,16 @@ double LookDriverScenePitchDegrees();
 void LookDriverApplyNativeYaw();
 
 // Marks the synchronous, mod-generated mouse dispatch whose engine cursor warp
-// must be suppressed. Real hardware mouse messages are left untouched.
+// must be suppressed. During a tracked session the engine's cursor warp is also
+// suppressed so it cannot move the desktop pointer.
 void LookDriverBeginSyntheticMouse();
 void LookDriverEndSyntheticMouse();
+bool LookDriverSyntheticMouseActive();
+
+// True while a valid tracked head pose owns gameplay look. Physical mouse
+// movement remains available in menus and whenever tracking is unavailable,
+// but must not fight the native head-yaw accumulator during gameplay.
+bool LookDriverHeadTrackingActive();
 
 // Installs the cursor guard if the renderer is loaded. Safe to call repeatedly,
 // and needs calling again after a module reload drops the patch.

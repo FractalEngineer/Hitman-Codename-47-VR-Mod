@@ -198,18 +198,21 @@ current Quest mapping is:
 | right grip | sneak toggle |
 | left grip | drop held item |
 
-Movement posts held keyboard messages to the game window. In non-gameplay
-screens the right stick drives an absolute native pointer through
-`WM_MOUSEMOVE`, and A or either trigger posts a held 80 ms `WM_LBUTTONDOWN` /
-`WM_LBUTTONUP` at that point. Left-stick arrows remain a fallback. Face buttons
-send 100 ms key taps and the gameplay fire trigger holds the mouse button.
+Movement uses the engine's native key state. In non-gameplay screens the right
+stick drives the engine's internal pointer through the captured RenderOpenGL
+input methods; no `WM_MOUSEMOVE`, `WM_LBUTTONDOWN`, or desktop cursor movement
+is posted. A or either trigger performs a held 80 ms native click after the
+pointer has settled for at least 50 ms. Left-stick arrows remain a directional
+fallback. Face buttons send 100 ms key taps and the gameplay fire trigger holds
+the mouse button.
 
 The game runs provisionally at `units_per_m=110` instead of 100 to reduce the
 perceived world size by 10%. Live `h47vr-lookstate.txt` now includes
 `headtarget`, `headpitch` and `headerror` in addition to engine readback. A
 sampled hold agreed within 0.07 degrees, so the remaining head-follow complaint
-is likely transient/jitter rather than static gain error. Native pitch uses a
-0.35-degree deadband.
+is likely transient/jitter rather than static gain error. The old 0.35-degree
+native pitch deadband quantized corrections into visible steps and has been
+removed; the one-pixel transport step is now the effective resolution.
 
 **Native camera origin, head near-cut and menu input, 2026-10-21.** The earlier
 `camera_lower` control only shifted eye-space vertices at the GL seam, so it
@@ -231,25 +234,30 @@ game units behind the follow anchor at pitch zero. Neutral, `+30.0373` and
 distance remains `distance=3.0`; a distance of `0.25` previously caused a
 half-floor spawn and remains reverted.
 
-`head_near` is a gameplay-only near-plane cut. With the default 24 game units,
+`head_near` is a gameplay-only near-plane cut. With the default 11 game units,
 first-person stereo removes head geometry around the eye while leaving the body
 and its shadow passes intact. The normal projection returns in theater mode, and
-a scripted camera moving the head beyond 24 units makes it visible automatically.
+a scripted camera moving the head beyond 11 units makes it visible automatically.
 The cut applies to both runtime asymmetric projections and the desktop fallback.
+Headless training captures bracketed the threshold: 8 and 10 units still showed
+a small head fragment, 11 removed it, and the previous 24-unit value was more
+than twice the necessary cut.
 
 The mod hooks RenderOpenGL's window procedure at RVA `0x2A050`, captures its
-input object, and exposes the native mouse and key slots. Menu keys are delivered
-synchronously through the window procedure, and the right stick integrates an
-absolute pointer position with A or either trigger performing an 80 ms click.
-Headless traversal opened profile selection from the main menu, accepted the
-profile, reached level selection and skipped gameplay with the menu-button ESC.
-Right-stick pointer selection and left-stick arrow selection still need an
+input object, and exposes the native mouse and key slots. Menu pointer movement
+now uses only those native slots; the old post-window fallback was removed so a
+controller move cannot hijack the desktop cursor. Controller A was verified
+end-to-end from profile selection to the level list in the background. The
+right-stick pointer click and left-stick arrow fallback still need a clean
 interactive check.
 
-The `SetCursorPos` hook is now restricted to synchronous mod-generated mouse
-messages. A real physical mouse keeps the engine's normal recenter behavior;
-native head yaw still shares the look accumulator, so mouse look and active
-headset look should not be mixed during gameplay.
+While tracked head pose is valid, a real mouse move is ignored during gameplay
+so it cannot fight the native head-yaw accumulator. Calls to `SetCursorPos` from
+the engine's mouse handler are swallowed throughout a tracked session, including
+menus, so the engine cannot pull the desktop pointer into the game. Desktop-only
+sessions retain the normal engine recenter behavior. This addresses both cursor
+hijacking and a concrete look-input contention source; it does not prove every
+residual tracking jerk is gone.
 
 **Pitch-dependent culling is the current blocker, 2026-10-20.** Straight-ahead
 XR rendering matches the last good engine-FOV behavior and retains sRGB. Looking
@@ -674,9 +682,10 @@ Two things the injected rotation cannot do, both worth remembering:
   1.8 static control, exact reversal back to 2.4, and the log records the
   foreground window so the claim is checkable on every run.
 - **Cursor guard.** The engine's `SetCursorPos` re-centre is swallowed when the
-  call comes from its own mouse handler (`RenderOpenGL` `0x29AC0`..`0x29E50`).
-  The swallow counter rises by exactly one per posted message; turns no longer
-  move the desktop pointer.
+  call comes from its own mouse handler (`RenderOpenGL` `0x29AC0`..`0x29E50`)
+  during a mod-generated turn or any active tracked session. The swallow counter
+  rises by exactly one per posted message; neither headset turns nor engine menu
+  recenter calls move the desktop pointer.
 - **Live camera readback and absolute aim.** `camera_readback.cpp` hooks the
   MouseConCam per-frame update and reads the offset vector it produced. The
   measured scale is 0.1289156 deg/px. Absolute requests are closed against this
@@ -1036,20 +1045,22 @@ removes the culling loss. The next work is camera positioning and motion quality
    offset's vertical pitch component. Validate that the pivot is on the neck and
    characterize the remaining horizontal arc before changing the follow distance
    again; `0.25` was not safe and caused a floor spawn.
-2. **Diagnose occasional head-tracked camera jerks.** `headtarget` and camera
-   yaw agreed within about 0.07 degrees in a sampled hold, so inspect prediction
-   timestamps, update cadence and pitch/yaw correction bursts rather than a static
-   gain error.
-3. **Complete the live controller/menu pass.** Verify the restored left/right
-   movement signs, 180-degree/second turning, directional snap, menu-button ESC,
-   right-stick pointer with A/trigger click, B-back, trigger fire, face buttons,
-   grips and full front-end traversal.
+2. **Finish the residual head-tracked jerk diagnosis.** The 0.35-degree pitch
+   deadband, tracked-session physical-mouse contention and engine cursor warps
+   have been removed as known jerk sources. Compare prediction timestamps and
+   update cadence on a physical pass before adding smoothing; static gain is not
+   the problem.
+3. **Complete the live controller/menu pass.** Profile confirmation through
+   controller A is verified. Check the delayed right-stick native pointer click
+   and left-stick arrows on the title, profile, level, options and in-level menus,
+   along with B-back, trigger fire, face buttons and grips.
 4. **Calibrate the final world scale.** The current headset test uses a
    provisional 110 units/metre with the user's 67 mm IPD; confirm it against a
    physical level landmark.
-5. **Tune the first-person near-cut.** Confirm that `head_near=24` removes the
-   whole head without clipping the body in practice, then validate the automatic
-   restore through crouching, leaning, death animations and scripted cameras.
+5. **Validate the 11-unit first-person near-cut.** Headless stereo bracketed the
+   threshold between 10 and 11. Confirm the smaller cut preserves shoulders and
+   torso on a physical pass, then validate the automatic restore through
+   crouching, leaning, death animations and scripted cameras.
 6. **Use the XR mirror for before/after work.** Left/right/side-by-side output
    and BMP capture preserve the submitted runtime image.
 7. **Keep the renderer map honest.** `objectDrawA` (`0x6590`) remains inert, so

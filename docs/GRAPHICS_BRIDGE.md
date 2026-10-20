@@ -212,11 +212,11 @@ Head yaw no longer uses synthesized mouse messages. `openxr_pose.cpp` publishes
 the predicted head pose, and `look_driver.cpp` adds the closed-loop yaw delta to
 `g_pSysInterface + 0xA95` immediately before MouseConCam's native update.
 Controller smooth/snap turning uses the same accumulator. Controller movement
-uses the engine's per-key state; ESC is posted as a held window key pair because
-a zero-duration pair is ignored. Menus additionally use the right stick as an
-absolute pointer. The mod captures RenderOpenGL's window-input object and calls
-its native move/down/up slots directly, because posted mouse messages are gated
-off while MouseConCam owns input.
+uses the engine's per-key state; ESC is delivered as a held window key pair
+because a zero-duration pair is ignored. Menus use the right stick as an engine
+pointer through captured RenderOpenGL input slots. The mod calls those native
+move/down/up methods directly; it no longer posts mouse messages or moves the
+desktop cursor as a fallback.
 
 The live controller profile now uses corrected movement axes, 180-degree/second
 smooth turn, directional stick-click snap, menu-button ESC, trigger fire,
@@ -224,11 +224,14 @@ A/B/X/Y actions, grip actions and left-stick-click run. The current world scale
 is a provisional 110 units/metre. Eye alignment now uses the engine's own follow
 target as the pivot, with `camera_lower=20` and `camera_forward=2.2`; neutral and
 plus/minus 30-degree headless readback keep the camera position fixed. Gameplay
-stereo applies a configurable near-plane cut (`head_near`) to remove the head
+stereo applies a configurable near-plane cut (`head_near=11`) to remove the head
 while preserving the body and shadow passes; the normal near plane returns in
-theater/forced camera states. Controller A/Enter traversal and menu-button ESC
-are verified. Right-stick pointer selection and occasional camera jerks remain
-under investigation.
+theater/forced camera states. Headless captures bracketed the threshold at 11
+units. Controller A/Enter traversal and menu-button ESC are verified.
+Right-stick pointer selection still needs a clean interactive pass. Physical
+mouse look is ignored while tracked gameplay owns the camera, and tracked
+sessions block engine cursor warps; the native correction deadband was removed
+to eliminate quantized tracking steps.
 
 ## Engine constraints to respect
 

@@ -394,9 +394,13 @@ the "camera hook" the gate asked for is not needed for it.
       forward (`W`). Menus use the right stick as a native pointer with A/trigger as a held left
       click; left stick arrows remain a fallback and B goes back. A captured RenderOpenGL input
       object exposes the renderer's native move/down/up and key slots, and menu keys are delivered
-      synchronously into the engine's window procedure. Headless traversal opened profile selection,
-      accepted the profile, reached level selection and skipped gameplay with the menu-button ESC.
-      The right-stick pointer click and left-stick arrow selection still need an interactive pass
+      synchronously into the engine's window procedure. Controller A now confirms profile selection
+      and reaches the level list with the game in the background. The menu pointer was made
+      native-only: post-window mouse fallback and cursor repositioning were removed so controller
+      navigation cannot move the desktop pointer. Pointer movement now settles for at least 50 ms
+      before the native click. Right-stick pointer selection and left-stick arrow selection still
+      need a clean interactive pass; the current evidence proves profile confirmation, not
+      arbitrary pointer clicks
 - [x] **Anchor eye-height calibration to the engine follow target, 2026-10-21.** `camera_lower` had
       previously translated vertices at the GL seam, which changed the image but not the camera or
       pitch pivot. The MouseConCam update now resolves its parent camera object (`self+0x08`) and
@@ -410,11 +414,13 @@ the "camera hook" the gate asked for is not needed for it.
       changing the engine's follow distance or collision path. The failed `0.25` distance
       experiment remains reverted to the usable `3.0`-unit setting
 - [~] **Dynamic first-person head near-cut, 2026-10-21.** Gameplay stereo now raises only the
-      submitted eye near plane to `head_near=24` game units while first-person mode and live
+      submitted eye near plane to `head_near=11` game units while first-person mode and live
       MouseConCam gameplay are active. This cuts the player's head geometry around the camera without
       hiding the body or its shadow passes. Theater and forced cameras render normally, and the head
       returns automatically once it is farther than the cut distance. Runtime and fallback projection
-      paths both honor the cut. Build and control-state verification pass; physical-headset visual
+      paths both honor the cut. Headless stereo captures on the training level established the
+      threshold directly: 8 and 10 units still left a visible head fragment, 11 removed it, and the
+      previous 24-unit default was more than twice the necessary distance. Physical-headset visual
       confirmation remains
 - [~] **Live headset integration pass, 2026-10-21.** The user confirmed that native engine pitch
       removes the previous culling loss. VirtualDesktopXR is presenting direct 2412x2596 sRGB eye
@@ -422,10 +428,12 @@ the "camera hook" the gate asked for is not needed for it.
       size by 10%. Live `headtarget`/camera diagnostics measured yaw agreement within about 0.07
       degrees at a sampled hold. The eye now pivots on the engine's resolved follow target; neutral,
       up-30 and down-30 headless captures were coherent and the camera position did not change.
-      Occasional tracking jerks remain. The 0.35-degree native pitch deadband reduces small pitch
-      corrections but does not yet prove the jerk source is gone. The cursor-warp guard is scoped
-      to mod-generated synchronous mouse messages, so a physical mouse keeps the engine's normal
-      recenter behavior
+      Occasional tracking jerks remain under observation. The 0.35-degree pitch deadband was removed
+      because it quantized corrections into visible steps; native yaw and pitch now use the
+      one-pixel transport step directly. Real mouse movement is ignored while tracked gameplay owns
+      the look accumulator, and the engine's cursor warp is swallowed throughout an active tracked
+      session so it cannot pull the desktop pointer into the game. These changes remove two concrete
+      jitter/pointer-fight sources, but do not prove every residual jerk is gone
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the

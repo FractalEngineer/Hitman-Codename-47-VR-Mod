@@ -1,10 +1,10 @@
 #include "h47vr/renderer_input.hpp"
 
+#include "h47vr/camera_readback.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/look_driver.hpp"
 #include "h47vr/symbols.hpp"
-#include "h47vr/window_keepalive.hpp"
 
 #include <windows.h>
 
@@ -32,40 +32,41 @@ std::atomic<unsigned long> g_native_dispatches{0};
 std::atomic<unsigned long> g_button_down_dispatches{0};
 std::atomic<unsigned long> g_button_up_dispatches{0};
 std::atomic<unsigned long> g_key_dispatches{0};
+std::atomic<unsigned long> g_real_mouse_swallowed{0};
 
-extern "C" __declspec(naked) void h47vr_detour_renderer_input() {
-    __asm {
-        mov dword ptr [h47vr_renderer_input_self], ecx
-        jmp dword ptr [h47vr_renderer_input_trampoline]
+using WindowProcedureFn =
+    LRESULT(__fastcall*)(void*, void*, UINT, WPARAM, LPARAM);
+
+LRESULT __fastcall HookRendererWindowProcedure(
+    void* self, void*, UINT message, WPARAM flags, LPARAM position) {
+    h47vr_renderer_input_self = self;
+
+    // Once a tracked pose owns gameplay look, a real mouse must not feed the
+    // same engine accumulator. Menus still receive the physical mouse, and
+    // mod-generated moves are explicitly marked so manual fallback look keeps
+    // working during a headset session.
+    if (!LookDriverSyntheticMouseActive() &&
+        (message == WM_MOUSEMOVE || message == WM_NCMOUSEMOVE) &&
+        CameraReadbackGameplayActive() && LookDriverHeadTrackingActive()) {
+        const unsigned long count = ++g_real_mouse_swallowed;
+        if (count == 1 || count % 600 == 0) {
+            H47VR_LOG_INFO("renderer input: ignored %lu physical mouse move(s) "
+                           "while head tracking owns gameplay look",
+                           count);
+        }
+        return 0;
     }
+
+    auto* real = reinterpret_cast<WindowProcedureFn>(
+        h47vr_renderer_input_trampoline);
+    return real != nullptr
+               ? real(self, nullptr, message, flags, position)
+               : ::DefWindowProcA(reinterpret_cast<HWND>(self), message, flags,
+                                  position);
 }
 
 void* InputObject() {
     return h47vr_renderer_input_self;
-}
-
-bool SendWindowInput(UINT message, WPARAM flags, int x, int y) {
-    void* self = InputObject();
-    HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
-    if (self == nullptr || window == nullptr) {
-        return false;
-    }
-    auto* bytes = static_cast<unsigned char*>(self);
-    const unsigned char previousMode = bytes[0x81];
-    const unsigned char previousClip = bytes[kWindowedClipOffset];
-    const unsigned char previousCaptured = bytes[kMouseCaptureOffset];
-    bytes[0x81] = 0;
-    bytes[kWindowedClipOffset] = 1;
-    bytes[kMouseCaptureOffset] = 0;
-    const LPARAM position =
-        MAKELPARAM(static_cast<WORD>(x), static_cast<WORD>(y));
-    LookDriverBeginSyntheticMouse();
-    ::SendMessageW(window, message, flags, position);
-    LookDriverEndSyntheticMouse();
-    bytes[0x81] = previousMode;
-    bytes[kWindowedClipOffset] = previousClip;
-    bytes[kMouseCaptureOffset] = previousCaptured;
-    return true;
 }
 
 void* InputSlot(void* self, int offset) {
@@ -92,6 +93,7 @@ bool Dispatch(const char* name, int slot, unsigned int flags, int x, int y) {
                              ? *reinterpret_cast<unsigned char**>(interfaceSlot)
                              : nullptr;
     auto* bytes = static_cast<unsigned char*>(self);
+    const unsigned char previousMode = bytes[0x81];
     const unsigned char previousClip = bytes[kWindowedClipOffset];
     const unsigned char previousCaptured = bytes[kMouseCaptureOffset];
     const unsigned char previousFullscreen =
@@ -101,6 +103,7 @@ bool Dispatch(const char* name, int slot, unsigned int flags, int x, int y) {
     // the client origin. The renderer already has an absolute branch for the
     // fullscreen input mode, and it is exactly the UI pointer this controller
     // needs. Select that branch only for the synchronous native dispatch.
+    bytes[0x81] = 0;
     bytes[kWindowedClipOffset] = 1;
     bytes[kMouseCaptureOffset] = 0;
     if (sysInterface != nullptr) {
@@ -109,6 +112,7 @@ bool Dispatch(const char* name, int slot, unsigned int flags, int x, int y) {
     using MouseHandlerFn =
         void(__thiscall*)(void*, unsigned int flags, int x, int y);
     reinterpret_cast<MouseHandlerFn>(target)(self, flags, x, y);
+    bytes[0x81] = previousMode;
     bytes[kWindowedClipOffset] = previousClip;
     bytes[kMouseCaptureOffset] = previousCaptured;
     if (sysInterface != nullptr) {
@@ -140,7 +144,7 @@ void RendererInputRearm() {
     void* target =
         reinterpret_cast<unsigned char*>(renderer) + kWindowProcedureRva;
     if (!HookAddress(target,
-                     reinterpret_cast<void*>(&h47vr_detour_renderer_input),
+                     reinterpret_cast<void*>(&HookRendererWindowProcedure),
                      reinterpret_cast<void**>(
                          &h47vr_renderer_input_trampoline))) {
         H47VR_LOG_ERROR("renderer input: could not hook window procedure at %p "
@@ -160,17 +164,10 @@ bool RendererInputAvailable() {
 }
 
 bool RendererInputMove(int x, int y) {
-    if (SendWindowInput(WM_MOUSEMOVE, 0, x, y)) {
-        return true;
-    }
     return Dispatch("move", kMouseMoveSlot, 0, x, y);
 }
 
 bool RendererInputButton(bool down, int x, int y) {
-    if (SendWindowInput(down ? WM_LBUTTONDOWN : WM_LBUTTONUP,
-                        down ? MK_LBUTTON : 0, x, y)) {
-        return true;
-    }
     const bool dispatched = Dispatch(down ? "left-down" : "left-up",
                                      down ? kLeftDownSlot : kLeftUpSlot,
                                      down ? MK_LBUTTON : 0, x, y);

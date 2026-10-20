@@ -30,8 +30,9 @@ synthesizing `WM_MOUSEMOVE`; the old mouse path remains a diagnostic fallback.
 The desktop can mirror the completed left, right, or side-by-side XR eye image,
 and a synthetic head-pose path keeps culling work headless. Minimal controller
 actions cover movement, smooth/snap turning and ESC, with left-stick arrows as
-a menu fallback plus a right-stick native mouse pointer for selection. The live
-Quest pass confirmed native pitch fixes the culling loss;
+a directional menu fallback plus a right-stick native pointer for selection.
+Controller pointer input never posts mouse messages or moves the desktop cursor.
+The live Quest pass confirmed native pitch fixes the culling loss;
 movement axes and snap direction have since been corrected, smooth turn is
 180 degrees/second, and a provisional 110-units-per-metre scale reduces the
 world size by about 10%. Straight-ahead rendering is coherent, but the legacy
@@ -39,13 +40,16 @@ GL-seam pitch path still loses the lower half of the image under a 45-degree
 pitch. The active native pitch feed produces coherent upward and downward
 mirrored views. Eye-height calibration now writes the real MouseConCam parent
 camera position instead of shifting final vertices. Gameplay stereo uses a
-configurable near cut (`head_near=24`) to remove the head while preserving the
+configurable near cut (`head_near=11`) to remove the head while preserving the
 body and its shadow passes; the head returns automatically when a forced camera
 moves away. The eye now pivots on the engine's resolved follow target, with the
 calibrated `camera_lower=20` and `camera_forward=2.2` alignment; neutral and
 plus/minus 30-degree pitch hold the same camera position in headless readback.
 Controller A/Enter traversal and menu-button ESC are verified. Right-stick
-pointer selection and occasional camera tracking jerks remain open.
+pointer selection still needs a clean interactive pass. Tracked gameplay now
+ignores physical mouse look and blocks engine cursor warps; the native
+correction deadband was removed, but residual tracking jerks need one physical
+retest before they can be called fixed.
 Menus and cinematics use theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head near-cut tuning and final eye-height

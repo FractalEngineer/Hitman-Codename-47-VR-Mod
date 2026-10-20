@@ -74,7 +74,7 @@ double g_head_reference_pitch = 0.0;
 // frames close the remaining error. The deadband avoids a stream of one-pixel
 // corrections from prediction noise.
 constexpr double kHeadDeadbandDegrees = 0.08;
-constexpr double kNativePitchDeadbandDegrees = 0.35;
+constexpr double kNativeCorrectionDeadbandDegrees = 0.01;
 constexpr int kHeadMaxPixelsPerFrame = 192;
 constexpr double kNativeMaxYawStepDegrees = 16.0;
 constexpr double kControllerTurnDegreesPerSecond = 180.0;
@@ -294,7 +294,8 @@ bool CalledFromMouseHandler(void* address) {
 }
 
 BOOL WINAPI HookSetCursorPos(int x, int y) {
-    if (g_synthetic_mouse_active && CalledFromMouseHandler(_ReturnAddress())) {
+    if (CalledFromMouseHandler(_ReturnAddress()) &&
+        (g_synthetic_mouse_active || LookDriverHeadTrackingActive())) {
         ++g_warp_swallowed;
         return TRUE;
     }
@@ -618,7 +619,7 @@ void LookDriverApplyNativeYaw() {
     if (g_head_valid && g_head_reference_valid) {
         const double targetYaw = Wrap180(g_head_yaw - g_head_reference_yaw);
         const double errorYaw = Wrap180(targetYaw - currentYaw);
-        if (std::fabs(errorYaw) >= kHeadDeadbandDegrees) {
+        if (std::fabs(errorYaw) >= kNativeCorrectionDeadbandDegrees) {
             yawDelta += std::clamp(
                 errorYaw, -kNativeMaxYawStepDegrees, kNativeMaxYawStepDegrees);
         }
@@ -696,7 +697,7 @@ void LookDriverApplyNativeYaw() {
         const double targetPitch =
             -(g_head_pitch - g_head_reference_pitch);
         const double errorPitch = targetPitch - currentPitch;
-        if (std::fabs(errorPitch) >= kNativePitchDeadbandDegrees) {
+        if (std::fabs(errorPitch) >= kNativeCorrectionDeadbandDegrees) {
             const double pitchDelta = std::clamp(
                 errorPitch, -kNativeMaxYawStepDegrees, kNativeMaxYawStepDegrees);
             double pitchPixels = pitchDelta / kReadbackDegPerPixel;
@@ -727,6 +728,14 @@ void LookDriverBeginSyntheticMouse() {
 
 void LookDriverEndSyntheticMouse() {
     g_synthetic_mouse_active = false;
+}
+
+bool LookDriverSyntheticMouseActive() {
+    return g_synthetic_mouse_active;
+}
+
+bool LookDriverHeadTrackingActive() {
+    return g_head_valid && g_head_reference_valid;
 }
 
 void LookDriverRearm() {

@@ -25,6 +25,7 @@ namespace {
 constexpr float kStickActivate = 0.32f;
 constexpr float kMenuPointerSpeedPixelsPerSecond = 720.0f;
 constexpr float kMenuPointerDeadzone = 0.12f;
+constexpr ULONGLONG kMenuPointerSettleMilliseconds = 50;
 
 std::mutex g_mutex;
 ControllerInputSnapshot g_physical;
@@ -40,6 +41,7 @@ bool g_menu_pointer_reported = false;
 float g_menu_pointer_x = 0.0f;
 float g_menu_pointer_y = 0.0f;
 ULONGLONG g_menu_pointer_tick = 0;
+bool g_menu_click_pending = false;
 bool g_menu_click_held = false;
 ULONGLONG g_menu_click_release_tick = 0;
 std::atomic<unsigned long> g_menu_moves{0};
@@ -328,7 +330,9 @@ void PostKeyboardKey(int vk, bool down) {
     if (vk <= 0) {
         return;
     }
-    (void)RendererInputKey(vk, down);
+    if (RendererInputKey(vk, down)) {
+        return;
+    }
     HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
     if (window == nullptr) {
         return;
@@ -497,10 +501,6 @@ void PostMenuPointerMove() {
     const int y = static_cast<short>(HIWORD(position));
     if (RendererInputMove(x, y)) {
         ++g_menu_moves;
-        return;
-    }
-    if (::PostMessageW(window, WM_MOUSEMOVE, 0, position)) {
-        ++g_menu_moves;
     }
 }
 
@@ -513,9 +513,7 @@ void PostMenuPointerClick() {
     }
     const int x = static_cast<short>(LOWORD(position));
     const int y = static_cast<short>(HIWORD(position));
-    const bool posted = RendererInputButton(true, x, y) ||
-                        ::PostMessageW(window, WM_LBUTTONDOWN, MK_LBUTTON,
-                                       position) != FALSE;
+    const bool posted = RendererInputButton(true, x, y);
     if (posted) {
         g_menu_click_held = true;
         g_menu_click_release_tick = ::GetTickCount64() + 80;
@@ -524,11 +522,18 @@ void PostMenuPointerClick() {
     }
 }
 
+void RequestMenuPointerClick() {
+    if (g_menu_pointer_initialized) {
+        g_menu_click_pending = true;
+    }
+}
+
 void ProcessMenuPointer(const ControllerInputSnapshot& state, bool gameplay) {
     if (gameplay) {
         g_menu_pointer_initialized = false;
         g_menu_pointer_reported = false;
         g_menu_pointer_tick = 0;
+        g_menu_click_pending = false;
         return;
     }
 
@@ -558,6 +563,7 @@ void ProcessMenuPointer(const ControllerInputSnapshot& state, bool gameplay) {
         PostMenuPointerMove();
         return;
     }
+
     if (!g_menu_pointer_initialized) {
         const bool requested =
             std::fabs(state.rightX) >= kMenuPointerDeadzone ||
@@ -578,7 +584,6 @@ void ProcessMenuPointer(const ControllerInputSnapshot& state, bool gameplay) {
                          ? 0.0f
                          : std::clamp((now - g_menu_pointer_tick) / 1000.0f,
                                       0.0f, 0.05f);
-    g_menu_pointer_tick = now;
     const float x = std::fabs(state.rightX) >= kMenuPointerDeadzone
                         ? state.rightX
                         : 0.0f;
@@ -588,6 +593,7 @@ void ProcessMenuPointer(const ControllerInputSnapshot& state, bool gameplay) {
     if (x == 0.0f && y == 0.0f) {
         return;
     }
+    g_menu_pointer_tick = now;
 
     g_menu_pointer_x = std::clamp(
         g_menu_pointer_x + x * kMenuPointerSpeedPixelsPerSecond * dt,
@@ -630,12 +636,10 @@ void ApplyButtonActions(const ControllerInputSnapshot& state) {
     }
     if (!gameplay && state.interactDown && !previous.interactDown) {
         TapKeyboardKey(VK_RETURN);
-        if (g_menu_pointer_initialized) {
-            PostMenuPointerClick();
-        }
+        RequestMenuPointerClick();
     } else if (!gameplay && state.fireDown && !previous.fireDown &&
                g_menu_pointer_initialized) {
-        PostMenuPointerClick();
+        RequestMenuPointerClick();
     }
     if (!gameplay && state.reloadDown && !previous.reloadDown) {
         TapKeyboardKey(VK_ESCAPE);
@@ -653,6 +657,12 @@ void ApplyButtonActions(const ControllerInputSnapshot& state) {
     }
     previous = state;
     ProcessPendingKeyReleases();
+    if (g_menu_click_pending && !g_menu_click_held &&
+        ::GetTickCount64() - g_menu_pointer_tick >=
+            kMenuPointerSettleMilliseconds) {
+        g_menu_click_pending = false;
+        PostMenuPointerClick();
+    }
     if (g_menu_click_held && ::GetTickCount64() >= g_menu_click_release_tick) {
         HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
         LPARAM position = 0;
@@ -661,9 +671,7 @@ void ApplyButtonActions(const ControllerInputSnapshot& state) {
                                   &position)) {
             const int x = static_cast<short>(LOWORD(position));
             const int y = static_cast<short>(HIWORD(position));
-            if (!RendererInputButton(false, x, y)) {
-                ::PostMessageW(window, WM_LBUTTONUP, 0, position);
-            }
+            (void)RendererInputButton(false, x, y);
         }
         g_menu_click_held = false;
     }
@@ -673,9 +681,17 @@ SHORT WINAPI HookGetAsyncKeyState(int vk) {
     const SHORT native = g_real_get_async_key_state != nullptr
                              ? g_real_get_async_key_state(vk)
                              : 0;
+    thread_local bool previousDown[256] = {};
     bool edge = false;
     if (!SyntheticDown(vk, &edge)) {
+        if (vk >= 0 && vk < 256) {
+            previousDown[vk] = (native & 0x8000) != 0;
+        }
         return native;
+    }
+    if (vk >= 0 && vk < 256) {
+        edge = edge || !previousDown[vk];
+        previousDown[vk] = true;
     }
     if (g_synthetic_keys.fetch_add(1) == 0) {
         H47VR_LOG_INFO("controller input: synthesizing engine keyboard state "
@@ -758,22 +774,25 @@ void ControllerInputFrame(unsigned long frame) {
         escapeWindow = reinterpret_cast<HWND>(WindowKeepaliveWindow());
         if (escapeWindow != nullptr) {
             const LPARAM down = MAKELPARAM(1, 0x01);
-            const bool postedDown =
-                ::SendMessageW(escapeWindow, WM_KEYDOWN, VK_ESCAPE, down) != FALSE;
-            H47VR_LOG_INFO("controller input: controller ESC key-down %s",
-                           postedDown ? "posted" : "post failed");
-            if (postedDown) {
-                escapeDownPosted = true;
-                escapeReleaseTick = ::GetTickCount64() + 120;
-            }
+            // A handled key message legitimately returns zero. SendMessage only
+            // fails by raising access exceptions, so the non-zero HWND is enough
+            // to schedule the matching key-up.
+            const LRESULT result =
+                ::SendMessageW(escapeWindow, WM_KEYDOWN, VK_ESCAPE, down);
+            escapeDownPosted = true;
+            escapeReleaseTick = ::GetTickCount64() + 120;
+            H47VR_LOG_INFO("controller input: controller ESC key-down delivered "
+                           "(result %ld)",
+                           static_cast<long>(result));
         }
     }
     if (escapeDownPosted && ::GetTickCount64() >= escapeReleaseTick) {
         const LPARAM up = static_cast<LPARAM>(0xC0010001u);
-        const bool postedUp =
-            ::SendMessageW(escapeWindow, WM_KEYUP, VK_ESCAPE, up) != FALSE;
-        H47VR_LOG_INFO("controller input: controller ESC key-up %s",
-                       postedUp ? "posted" : "post failed");
+        const LRESULT result =
+            ::SendMessageW(escapeWindow, WM_KEYUP, VK_ESCAPE, up);
+        H47VR_LOG_INFO("controller input: controller ESC key-up delivered "
+                       "(result %ld)",
+                       static_cast<long>(result));
         escapeDownPosted = false;
     }
 }

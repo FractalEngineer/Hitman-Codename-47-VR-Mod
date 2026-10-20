@@ -31,7 +31,7 @@
     follow distance or collision path.
 
 .PARAMETER HeadClipNear
-    Gameplay-only near-plane distance in game units. The default 24-unit cut
+    Gameplay-only near-plane distance in game units. The default 11-unit cut
     removes the player's head geometry around the first-person camera while
     leaving the body and shadow passes intact. The normal near plane returns as
     soon as a cinematic or scripted camera moves the head out of range.
@@ -48,7 +48,7 @@ param(
     [double]$GameUnitsPerMetre = 100.0,
     [double]$CameraLower = 0.0,
     [double]$CameraForward = 2.2,
-    [double]$HeadClipNear = 24.0,
+    [double]$HeadClipNear = 11.0,
     [double]$Ipd,
     [switch]$Off,
     [string]$GameDir

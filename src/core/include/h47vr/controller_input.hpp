@@ -20,6 +20,9 @@ struct ControllerInputSnapshot {
     float leftY = 0.0f;
     float rightX = 0.0f;
     float rightY = 0.0f;
+    float menuX = 0.0f;
+    float menuY = 0.0f;
+    bool menuAbsolute = false;
     unsigned long long escapeGeneration = 0;
     unsigned long long snapGeneration = 0;
 };

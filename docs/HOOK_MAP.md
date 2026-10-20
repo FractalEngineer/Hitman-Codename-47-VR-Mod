@@ -186,11 +186,14 @@ and migration fallback. The camera still performs its own translation,
 collision and visibility work.
 
 After the original update returns, the hook resolves `MouseConCam+0x08` to the
-parent camera object and adjusts its world position at `camera+0x08`.
-`camera_lower` changes this real float Y value, and the offset vector's vertical
-pitch component is removed there so native pitch is available to the visibility
-pass without moving the eye up or down along the follow sphere. This replaced
-the older GL-seam vertical shift.
+parent camera object and adjusts its world position at `camera+0x08`. It resolves
+the engine's follow target through `MouseConCam+0x29 -> +0x0C`, the handle
+resolver at RVA `0x262D0`, and the camera vtable slot `+0x5C`. The corrected eye
+is the target anchor plus a yaw-only horizontal offset: `camera_lower` moves the
+real camera vertically and `camera_forward` applies the calibrated 2 cm forward
+alignment without changing the follow distance. Headless training readback kept
+the anchor and camera position exactly fixed at 0, +30.0373 and -30.0373 degrees
+pitch. This replaced the older GL-seam vertical shift.
 
 ### First-person head near-cut
 
@@ -229,10 +232,18 @@ The ESC startup guard ignores a button already held during the first four
 seconds of launch. This prevents the OpenXR session-entry press from closing the
 intro. In non-gameplay screens the right stick moves an absolute pointer and A
 or either trigger performs an 80 ms left click. `renderer_input.cpp` captures the
-RenderOpenGL window-input object and invokes its native `+0x194`, `+0x178` and
-`+0x17C` handlers directly, because the window procedure drops posted mouse
-messages when renderer `+0x81` is set. Left-stick arrows remain a fallback. Full
-physical menu traversal still needs a check.
+RenderOpenGL window-input object and exposes its native move/down/up and key
+slots. Menu keys are delivered synchronously through the window procedure, so
+they survive background focus. Headless traversal opened profile selection from
+the main menu, accepted the profile, reached level selection and skipped
+gameplay with the menu-button ESC. Right-stick pointer selection and left-stick
+arrow selection still need an interactive check.
+
+The cursor-warp hook now suppresses `SetCursorPos` only during synchronous
+mod-generated mouse messages. Real hardware mouse movement is no longer denied
+the engine's normal recenter behavior. Native head yaw still shares the engine
+look accumulator, so physical mouse look and active headset look should not be
+used simultaneously during gameplay.
 
 ### Renderer candidates
 

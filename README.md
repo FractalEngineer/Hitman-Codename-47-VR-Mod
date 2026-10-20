@@ -41,8 +41,11 @@ mirrored views. Eye-height calibration now writes the real MouseConCam parent
 camera position instead of shifting final vertices. Gameplay stereo uses a
 configurable near cut (`head_near=24`) to remove the head while preserving the
 body and its shadow passes; the head returns automatically when a forced camera
-moves away. Final neck/eye alignment and occasional camera tracking jerks remain
-open.
+moves away. The eye now pivots on the engine's resolved follow target, with the
+calibrated `camera_lower=20` and `camera_forward=2.2` alignment; neutral and
+plus/minus 30-degree pitch hold the same camera position in headless readback.
+Controller A/Enter traversal and menu-button ESC are verified. Right-stick
+pointer selection and occasional camera tracking jerks remain open.
 Menus and cinematics use theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head near-cut tuning and final eye-height

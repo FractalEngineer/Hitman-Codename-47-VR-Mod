@@ -10,5 +10,6 @@ void RendererInputRearm();
 bool RendererInputAvailable();
 bool RendererInputMove(int x, int y);
 bool RendererInputButton(bool down, int x, int y);
+bool RendererInputKey(int vk, bool down);
 
 }  // namespace h47vr

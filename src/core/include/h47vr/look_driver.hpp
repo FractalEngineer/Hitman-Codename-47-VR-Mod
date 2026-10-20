@@ -43,6 +43,11 @@ double LookDriverScenePitchDegrees();
 // MouseConCam, avoiding WM_MOUSEMOVE and cursor-space assumptions.
 void LookDriverApplyNativeYaw();
 
+// Marks the synchronous, mod-generated mouse dispatch whose engine cursor warp
+// must be suppressed. Real hardware mouse messages are left untouched.
+void LookDriverBeginSyntheticMouse();
+void LookDriverEndSyntheticMouse();
+
 // Installs the cursor guard if the renderer is loaded. Safe to call repeatedly,
 // and needs calling again after a module reload drops the patch.
 void LookDriverRearm();

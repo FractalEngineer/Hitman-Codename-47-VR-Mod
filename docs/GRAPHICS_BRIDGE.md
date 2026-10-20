@@ -221,12 +221,13 @@ off while MouseConCam owns input.
 The live controller profile now uses corrected movement axes, 180-degree/second
 smooth turn, directional stick-click snap, menu-button ESC, trigger fire,
 A/B/X/Y actions, grip actions and left-stick-click run. The current world scale
-is a provisional 110 units/metre. Eye-height calibration now lowers the real
-MouseConCam parent camera position after each engine update and removes the
-offset's vertical pitch component from that position. Gameplay stereo applies a
-configurable near-plane cut (`head_near`) to remove the head while preserving
-the body and shadow passes; the normal near plane returns in theater/forced
-camera states. Final neck/eye alignment and occasional camera jerks are still
+is a provisional 110 units/metre. Eye alignment now uses the engine's own follow
+target as the pivot, with `camera_lower=20` and `camera_forward=2.2`; neutral and
+plus/minus 30-degree headless readback keep the camera position fixed. Gameplay
+stereo applies a configurable near-plane cut (`head_near`) to remove the head
+while preserving the body and shadow passes; the normal near plane returns in
+theater/forced camera states. Controller A/Enter traversal and menu-button ESC
+are verified. Right-stick pointer selection and occasional camera jerks remain
 under investigation.
 
 ## Engine constraints to respect

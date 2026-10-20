@@ -25,6 +25,11 @@
     engine camera after MouseConCam updates it, so collision, visibility and the
     pitch pivot use the same corrected position.
 
+.PARAMETER CameraForward
+    Forward eye-alignment correction in game units. Positive values move the
+    physical camera toward the facing direction without changing the engine's
+    follow distance or collision path.
+
 .PARAMETER HeadClipNear
     Gameplay-only near-plane distance in game units. The default 24-unit cut
     removes the player's head geometry around the first-person camera while
@@ -42,6 +47,7 @@ param(
     [double]$IpdMillimeters = 67.0,
     [double]$GameUnitsPerMetre = 100.0,
     [double]$CameraLower = 0.0,
+    [double]$CameraForward = 2.2,
     [double]$HeadClipNear = 24.0,
     [double]$Ipd,
     [switch]$Off,
@@ -84,14 +90,17 @@ if ($IpdMillimeters -le 0 -or $IpdMillimeters -gt 1000) {
 if ($CameraLower -lt -100 -or $CameraLower -gt 100) {
     throw 'CameraLower must be between -100 and 100 game units.'
 }
+if ($CameraForward -lt -100 -or $CameraForward -gt 100) {
+    throw 'CameraForward must be between -100 and 100 game units.'
+}
 if ($HeadClipNear -lt 0 -or $HeadClipNear -gt 1000) {
     throw 'HeadClipNear must be between 0 and 1000 game units.'
 }
 $request = if ($PSBoundParameters.ContainsKey('Ipd')) {
     "ipd={0}" -f $Ipd
 } else {
-    "ipd_mm={0} units_per_m={1} camera_lower={2} head_near={3}" -f `
-        $IpdMillimeters, $GameUnitsPerMetre, $CameraLower, $HeadClipNear
+    "ipd_mm={0} units_per_m={1} camera_lower={2} camera_forward={3} head_near={4}" -f `
+        $IpdMillimeters, $GameUnitsPerMetre, $CameraLower, $CameraForward, $HeadClipNear
 }
 Set-Content -LiteralPath $control -Value $request -Encoding ascii
 Write-Host ("stereo on: {0}" -f $control)

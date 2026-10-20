@@ -30,6 +30,7 @@ std::atomic<unsigned long> g_warp_swallowed{0};
 std::atomic<unsigned long> g_head_posts{0};
 std::atomic<unsigned long> g_native_posts{0};
 std::atomic<bool> g_cursor_guard{false};
+thread_local bool g_synthetic_mouse_active = false;
 std::atomic<double> g_scene_pitch_degrees{0.0};
 std::atomic<bool> g_native_path_ready{false};
 
@@ -101,6 +102,8 @@ ULONGLONG g_last_controller_turn_tick = 0;
 std::wstring g_debug_head_path;
 std::wstring g_native_pitch_path;
 bool g_debug_head_active = false;
+double g_last_debug_head_yaw = 0.0;
+double g_last_debug_head_pitch = 0.0;
 std::atomic<bool> g_native_pitch_enabled{false};
 std::atomic<unsigned long> g_native_pitch_posts{0};
 
@@ -291,7 +294,7 @@ bool CalledFromMouseHandler(void* address) {
 }
 
 BOOL WINAPI HookSetCursorPos(int x, int y) {
-    if (CalledFromMouseHandler(_ReturnAddress())) {
+    if (g_synthetic_mouse_active && CalledFromMouseHandler(_ReturnAddress())) {
         ++g_warp_swallowed;
         return TRUE;
     }
@@ -360,11 +363,10 @@ void PostStep(int stepX, int stepY) {
     const int x = centreX + stepX;
     const int y = centreY + stepY;
 
-    if (::PostMessageW(window, WM_MOUSEMOVE, 0, MAKELPARAM(x, y))) {
-        ++g_messages;
-    } else {
-        ++g_post_failures;
-    }
+    LookDriverBeginSyntheticMouse();
+    ::SendMessageW(window, WM_MOUSEMOVE, 0, MAKELPARAM(x, y));
+    LookDriverEndSyntheticMouse();
+    ++g_messages;
 }
 
 void BeginTurn(unsigned long frame, int steps, int rate) {
@@ -719,6 +721,14 @@ void LookDriverApplyNativeYaw() {
     }
 }
 
+void LookDriverBeginSyntheticMouse() {
+    g_synthetic_mouse_active = true;
+}
+
+void LookDriverEndSyntheticMouse() {
+    g_synthetic_mouse_active = false;
+}
+
 void LookDriverRearm() {
     if (g_cursor_guard.load()) {
         return;
@@ -737,6 +747,11 @@ void LookDriverRearm() {
 
 void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees) {
     if (!valid) {
+        if (!g_debug_head_path.empty() &&
+            ::GetFileAttributesW(g_debug_head_path.c_str()) !=
+                INVALID_FILE_ATTRIBUTES) {
+            return;
+        }
         if (g_head_valid) {
             H47VR_LOG_INFO("look driver: head tracking paused (no valid pose)");
         }
@@ -781,9 +796,15 @@ void LookDriverFrame(unsigned long frame) {
     double testYaw = 0.0;
     double testPitch = 0.0;
     if (ReadHeadPoseTest(&testYaw, &testPitch)) {
-        if (!g_debug_head_active) {
+        if (!g_debug_head_active ||
+            std::fabs(testYaw - g_last_debug_head_yaw) > 0.001 ||
+            std::fabs(testPitch - g_last_debug_head_pitch) > 0.001) {
             g_debug_head_active = true;
-            H47VR_LOG_INFO("look driver: head pose test override enabled");
+            g_last_debug_head_yaw = testYaw;
+            g_last_debug_head_pitch = testPitch;
+            H47VR_LOG_INFO("look driver: head pose test override yaw=%.2f "
+                           "pitch=%.2f",
+                           testYaw, testPitch);
         }
         LookDriverSetHeadPose(true, testYaw, testPitch);
     } else if (g_debug_head_active) {

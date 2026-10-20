@@ -393,18 +393,22 @@ the "camera hook" the gate asked for is not needed for it.
       negative X = left (`A`), positive X = right (`D`), negative Y = back (`S`) and positive Y =
       forward (`W`). Menus use the right stick as a native pointer with A/trigger as a held left
       click; left stick arrows remain a fallback and B goes back. A captured RenderOpenGL input
-      object now lets the controller call the renderer's native move/down/up slots directly, bypassing
-      the window-procedure gate that discarded posted menu messages. Camera height and random
-      tracking jerks remain open
-- [~] **Move eye-height calibration to the real engine camera, 2026-10-21.** `camera_lower` had
+      object exposes the renderer's native move/down/up and key slots, and menu keys are delivered
+      synchronously into the engine's window procedure. Headless traversal opened profile selection,
+      accepted the profile, reached level selection and skipped gameplay with the menu-button ESC.
+      The right-stick pointer click and left-stick arrow selection still need an interactive pass
+- [x] **Anchor eye-height calibration to the engine follow target, 2026-10-21.** `camera_lower` had
       previously translated vertices at the GL seam, which changed the image but not the camera or
       pitch pivot. The MouseConCam update now resolves its parent camera object (`self+0x08`) and
-      writes the world position at `parent+0x08` after the engine update. The native offset's
-      vertical pitch component is removed from the camera position so engine pitch can continue to
-      drive visibility without raising or sinking the eye. Live readback moved the training camera
-      from approximately Y `-305.9` to `-325.5` with `camera_lower=20`. A failed experiment that
-      collapsed the follow distance to `0.25` caused a half-floor spawn and has been reverted to
-      the usable `3.0`-unit setting. Final neck/eye alignment still needs the user's live check
+      writes the world position at `parent+0x08` after the engine update. It resolves the engine's
+      follow target through `MouseConCam+0x29 -> +0x0C`, the handle resolver at RVA `0x262D0` and
+      the camera vtable slot `+0x5C`. The corrected eye is that stable anchor plus a yaw-only
+      horizontal offset, so pitch continues to drive engine visibility without orbiting the eye.
+      Headless training readback measured the same anchor and camera position at neutral,
+      `+30.0373` and `-30.0373` degrees. `camera_lower=20` lowers the real camera and
+      `camera_forward=2.2` applies the final 2 cm forward alignment at 110 units/metre without
+      changing the engine's follow distance or collision path. The failed `0.25` distance
+      experiment remains reverted to the usable `3.0`-unit setting
 - [~] **Dynamic first-person head near-cut, 2026-10-21.** Gameplay stereo now raises only the
       submitted eye near plane to `head_near=24` game units while first-person mode and live
       MouseConCam gameplay are active. This cuts the player's head geometry around the camera without
@@ -416,10 +420,12 @@ the "camera hook" the gate asked for is not needed for it.
       removes the previous culling loss. VirtualDesktopXR is presenting direct 2412x2596 sRGB eye
       images with the 67 mm profile. A provisional `units_per_m=110` reduces the perceived world
       size by 10%. Live `headtarget`/camera diagnostics measured yaw agreement within about 0.07
-      degrees at a sampled hold. The height correction now targets the real engine camera position
-      rather than the final GL vertices; the remaining complaint is the pitch pivot moving around
-      the follow anchor. Occasional tracking jerks remain. The 0.35-degree native pitch deadband
-      reduces small pitch corrections but does not yet prove the jerk source is gone
+      degrees at a sampled hold. The eye now pivots on the engine's resolved follow target; neutral,
+      up-30 and down-30 headless captures were coherent and the camera position did not change.
+      Occasional tracking jerks remain. The 0.35-degree native pitch deadband reduces small pitch
+      corrections but does not yet prove the jerk source is gone. The cursor-warp guard is scoped
+      to mod-generated synchronous mouse messages, so a physical mouse keeps the engine's normal
+      recenter behavior
 
 Stereo verification, 2026-10-19: the first side-by-side capture changed the frame by 21.46 mean
 absolute channel value against the normal view. The left and right halves differed by 7.41 at the

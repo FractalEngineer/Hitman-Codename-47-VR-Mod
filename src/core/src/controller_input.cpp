@@ -117,6 +117,8 @@ void RefreshDebugOverride() {
         float fire = 0.0f;
         float sneak = 0.0f;
         float drop = 0.0f;
+        float menuX = -1.0f;
+        float menuY = -1.0f;
         ReadNumber(line, "esc", &escape);
         ReadNumber(line, "snap", &snap);
         ReadNumber(line, "interact", &interact);
@@ -127,6 +129,8 @@ void RefreshDebugOverride() {
         ReadNumber(line, "fire", &fire);
         ReadNumber(line, "sneak", &sneak);
         ReadNumber(line, "drop", &drop);
+        ReadNumber(line, "mx", &menuX);
+        ReadNumber(line, "my", &menuY);
         next.escapeDown = escape != 0.0f;
         next.snapDown = snap != 0.0f;
         next.interactDown = interact != 0.0f;
@@ -137,6 +141,9 @@ void RefreshDebugOverride() {
         next.fireDown = fire != 0.0f;
         next.sneakDown = sneak != 0.0f;
         next.dropDown = drop != 0.0f;
+        next.menuX = menuX;
+        next.menuY = menuY;
+        next.menuAbsolute = menuX >= 0.0f && menuY >= 0.0f;
         next.leftX = ClampAxis(next.leftX);
         next.leftY = ClampAxis(next.leftY);
         next.rightX = ClampAxis(next.rightX);
@@ -216,6 +223,25 @@ bool SyntheticDown(int vk, bool* edge) {
             g_escape_generation_seen = state.escapeGeneration;
         }
         return true;
+    }
+    const bool gameplay = CameraReadbackGameplayActive();
+    if (!gameplay) {
+        if ((vk == VK_RETURN && (state.interactDown || state.fireDown)) ||
+            (vk == VK_ESCAPE && state.reloadDown)) {
+            *edge = false;
+            return true;
+        }
+    } else {
+        if ((vk == 'E' && state.interactDown) ||
+            (vk == 'R' && state.reloadDown) ||
+            (vk == 'T' && state.weaponModeDown) ||
+            (vk == VK_F2 && state.statusDown) ||
+            (vk == VK_SPACE && state.sneakDown) ||
+            (vk == 'G' && state.dropDown) ||
+            (vk == VK_LSHIFT && state.runDown)) {
+            *edge = false;
+            return true;
+        }
     }
     int keys[5] = {};
     const int count = MappedKeys(state, keys);
@@ -302,6 +328,7 @@ void PostKeyboardKey(int vk, bool down) {
     if (vk <= 0) {
         return;
     }
+    (void)RendererInputKey(vk, down);
     HWND window = reinterpret_cast<HWND>(WindowKeepaliveWindow());
     if (window == nullptr) {
         return;
@@ -315,7 +342,10 @@ void PostKeyboardKey(int vk, bool down) {
     if (!down) {
         lparam |= static_cast<LPARAM>(0xC0000000u);
     }
-    ::PostMessageW(window, down ? WM_KEYDOWN : WM_KEYUP,
+    // Deliver synchronously into the engine's own window procedure. The game
+    // can be alive in the background, and its message pump may not run while
+    // the desktop has focus.
+    ::SendMessageW(window, down ? WM_KEYDOWN : WM_KEYUP,
                    static_cast<WPARAM>(vk), lparam);
 }
 
@@ -323,7 +353,7 @@ void ApplyWindowKeyState(const ControllerInputSnapshot& state) {
     int keys[5] = {};
     const int count = MappedKeys(state, keys);
     static int previous[5] = {};
-    static unsigned long transitions = 0;
+    static bool reportedFirstTransition = false;
 
     for (int i = 0; i < 5; ++i) {
         bool stillDown = false;
@@ -332,7 +362,6 @@ void ApplyWindowKeyState(const ControllerInputSnapshot& state) {
         }
         if (!stillDown && previous[i] != 0) {
             PostKeyboardKey(previous[i], false);
-            ++transitions;
         }
     }
     for (int n = 0; n < count; ++n) {
@@ -342,15 +371,15 @@ void ApplyWindowKeyState(const ControllerInputSnapshot& state) {
         }
         if (!wasDown) {
             PostKeyboardKey(keys[n], true);
-            ++transitions;
+            if (!reportedFirstTransition) {
+                reportedFirstTransition = true;
+                H47VR_LOG_INFO("controller input: left-stick movement is posting "
+                               "engine keyboard messages");
+            }
         }
     }
     for (int i = 0; i < 5; ++i) {
         previous[i] = i < count ? keys[i] : 0;
-    }
-    if (transitions == 1) {
-        H47VR_LOG_INFO("controller input: left-stick movement is posting "
-                       "engine keyboard messages");
     }
 }
 
@@ -519,6 +548,16 @@ void ProcessMenuPointer(const ControllerInputSnapshot& state, bool gameplay) {
     }
 
     const ULONGLONG now = ::GetTickCount64();
+    if (state.menuAbsolute) {
+        g_menu_pointer_initialized = true;
+        g_menu_pointer_x = std::clamp(state.menuX, 1.0f,
+                                      static_cast<float>(width - 2));
+        g_menu_pointer_y = std::clamp(state.menuY, 1.0f,
+                                      static_cast<float>(height - 2));
+        g_menu_pointer_tick = now;
+        PostMenuPointerMove();
+        return;
+    }
     if (!g_menu_pointer_initialized) {
         const bool requested =
             std::fabs(state.rightX) >= kMenuPointerDeadzone ||
@@ -589,16 +628,14 @@ void ApplyButtonActions(const ControllerInputSnapshot& state) {
     if (gameplay && state.dropDown && !previous.dropDown) {
         TapKeyboardKey('G');
     }
-    const bool menuClickDown =
-        !gameplay && (state.interactDown || state.fireDown);
-    const bool previousMenuClickDown =
-        !gameplay && (previous.interactDown || previous.fireDown);
-    if (menuClickDown && !previousMenuClickDown &&
-        g_menu_pointer_initialized) {
-        PostMenuPointerClick();
-    } else if (!gameplay && state.interactDown && !previous.interactDown &&
-               !g_menu_pointer_initialized) {
+    if (!gameplay && state.interactDown && !previous.interactDown) {
         TapKeyboardKey(VK_RETURN);
+        if (g_menu_pointer_initialized) {
+            PostMenuPointerClick();
+        }
+    } else if (!gameplay && state.fireDown && !previous.fireDown &&
+               g_menu_pointer_initialized) {
+        PostMenuPointerClick();
     }
     if (!gameplay && state.reloadDown && !previous.reloadDown) {
         TapKeyboardKey(VK_ESCAPE);
@@ -722,7 +759,7 @@ void ControllerInputFrame(unsigned long frame) {
         if (escapeWindow != nullptr) {
             const LPARAM down = MAKELPARAM(1, 0x01);
             const bool postedDown =
-                ::PostMessageW(escapeWindow, WM_KEYDOWN, VK_ESCAPE, down) != FALSE;
+                ::SendMessageW(escapeWindow, WM_KEYDOWN, VK_ESCAPE, down) != FALSE;
             H47VR_LOG_INFO("controller input: controller ESC key-down %s",
                            postedDown ? "posted" : "post failed");
             if (postedDown) {
@@ -734,7 +771,7 @@ void ControllerInputFrame(unsigned long frame) {
     if (escapeDownPosted && ::GetTickCount64() >= escapeReleaseTick) {
         const LPARAM up = static_cast<LPARAM>(0xC0010001u);
         const bool postedUp =
-            ::PostMessageW(escapeWindow, WM_KEYUP, VK_ESCAPE, up) != FALSE;
+            ::SendMessageW(escapeWindow, WM_KEYUP, VK_ESCAPE, up) != FALSE;
         H47VR_LOG_INFO("controller input: controller ESC key-up %s",
                        postedUp ? "posted" : "post failed");
         escapeDownPosted = false;

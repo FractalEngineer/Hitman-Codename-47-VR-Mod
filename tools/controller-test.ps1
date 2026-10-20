@@ -10,6 +10,10 @@
 
 .PARAMETER Off
     Remove the test sample and return to live OpenXR input.
+
+.PARAMETER HoldMilliseconds
+    Keep the sample active for this long, then remove it. This makes timed
+    pointer and smooth-turn tests reproducible from one command.
 #>
 [CmdletBinding()]
 param(
@@ -28,6 +32,9 @@ param(
     [switch]$Sneak,
     [switch]$Drop,
     [switch]$Off,
+    [int]$HoldMilliseconds = 0,
+    [double]$MenuX = -1.0,
+    [double]$MenuY = -1.0,
     [string]$GameDir
 )
 
@@ -59,7 +66,7 @@ if ($Off) {
     Write-Host 'controller test override off'
 } else {
     Set-Content -LiteralPath $control -Encoding ascii -Value (
-        'lx={0} ly={1} rx={2} ry={3} esc={4} snap={5} interact={6} reload={7} weapon={8} status={9} run={10} fire={11} sneak={12} drop={13}' -f
+        'lx={0} ly={1} rx={2} ry={3} esc={4} snap={5} interact={6} reload={7} weapon={8} status={9} run={10} fire={11} sneak={12} drop={13} mx={14} my={15}' -f
             $LeftX, $LeftY, $RightX, $RightY,
             $(if ($Escape) { 1 } else { 0 }),
             $(if ($Snap) { 1 } else { 0 }),
@@ -70,6 +77,14 @@ if ($Off) {
             $(if ($Run) { 1 } else { 0 }),
             $(if ($Fire) { 1 } else { 0 }),
             $(if ($Sneak) { 1 } else { 0 }),
-            $(if ($Drop) { 1 } else { 0 }))
-    Write-Host 'controller test sample written'
+            $(if ($Drop) { 1 } else { 0 }),
+            $MenuX, $MenuY)
+    if ($HoldMilliseconds -gt 0) {
+        Write-Host ("controller test sample held for {0} ms" -f $HoldMilliseconds)
+        Start-Sleep -Milliseconds $HoldMilliseconds
+        Remove-Item -LiteralPath $control -Force -ErrorAction SilentlyContinue
+        Write-Host 'controller test override off'
+    } else {
+        Write-Host 'controller test sample written'
+    }
 }

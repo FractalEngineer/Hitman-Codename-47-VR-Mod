@@ -13,6 +13,7 @@ bool StereoRendererStart();
 void StereoRendererFrame(unsigned long frame);
 StereoMode StereoRendererMode();
 float StereoRendererCameraLowerUnits();
+float StereoRendererCameraForwardUnits();
 
 // Called by the renderer hook. In stereo mode a perspective draw is replayed
 // once per eye while MouseConCam is actively updating. Menus, cutscenes and

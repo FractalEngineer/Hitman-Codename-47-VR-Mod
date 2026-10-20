@@ -218,16 +218,18 @@ unchanged. The MouseConCam hook now resolves the parent camera object
 (`MouseConCam+0x08`) and adjusts its world-position float triple
 (`camera+0x08`) immediately after the engine update. Positive
 `camera_lower` lowers that real position; it no longer applies a GL vertical
-offset. The same hook removes the offset vector's vertical pitch component from
-the camera position, so native pitch still supplies visibility while no longer
-raising or sinking the eye along the follow sphere.
+offset. The hook resolves the engine's follow target through
+`MouseConCam+0x29 -> +0x0C`, the handle resolver at RVA `0x262D0`, and the camera
+vtable slot `+0x5C`. The corrected eye is that stable anchor plus a yaw-only
+horizontal offset, so native pitch supplies visibility without orbiting the eye.
 
-Live readback on the training level confirmed the native write: with
-`camera_lower=20`, the camera Y moved from approximately `-305.9` to `-325.5`.
-`h47vr-camread.txt` now includes the resolved camera `position=`. A follow
-distance of `0.8` did not give a useful pivot change, and `0.25` spawned the
-player halfway through the floor; both experiments are reverted and the live
-profile is back at `distance=3.0`.
+Live readback on the training level confirmed the native write:
+with `camera_lower=20` and `camera_forward=2.2`, the camera sits exactly 0.8
+game units behind the follow anchor at pitch zero. Neutral, `+30.0373` and
+`-30.0373` degrees pitch all produced the identical anchor and camera position.
+`h47vr-camread.txt` includes both `anchor=` and `position=`. The base follow
+distance remains `distance=3.0`; a distance of `0.25` previously caused a
+half-floor spawn and remains reverted.
 
 `head_near` is a gameplay-only near-plane cut. With the default 24 game units,
 first-person stereo removes head geometry around the eye while leaving the body
@@ -235,13 +237,19 @@ and its shadow passes intact. The normal projection returns in theater mode, and
 a scripted camera moving the head beyond 24 units makes it visible automatically.
 The cut applies to both runtime asymmetric projections and the desktop fallback.
 
-The front-end pointer no longer relies on posted window messages. The mod hooks
-RenderOpenGL's window procedure at RVA `0x2A050`, captures its input object, and
-calls the native mouse-move and left-down/up vtable slots directly. This bypasses
-the `+0x81` gate that silently discarded posted messages. The right stick
-integrates an absolute position and A or either trigger performs an 80 ms click;
-the message path remains only as fallback. Headless logs confirm native move and
-button dispatch.
+The mod hooks RenderOpenGL's window procedure at RVA `0x2A050`, captures its
+input object, and exposes the native mouse and key slots. Menu keys are delivered
+synchronously through the window procedure, and the right stick integrates an
+absolute pointer position with A or either trigger performing an 80 ms click.
+Headless traversal opened profile selection from the main menu, accepted the
+profile, reached level selection and skipped gameplay with the menu-button ESC.
+Right-stick pointer selection and left-stick arrow selection still need an
+interactive check.
+
+The `SetCursorPos` hook is now restricted to synchronous mod-generated mouse
+messages. A real physical mouse keeps the engine's normal recenter behavior;
+native head yaw still shares the look accumulator, so mouse look and active
+headset look should not be mixed during gameplay.
 
 **Pitch-dependent culling is the current blocker, 2026-10-20.** Straight-ahead
 XR rendering matches the last good engine-FOV behavior and retains sRGB. Looking
@@ -570,7 +578,7 @@ Control files next to the game (all optional, delete to disable):
 | --- | --- |
 | `h47vr-look.txt` | `dx=<px> dy=<px> [steps=<n>] [rate=<frames>]` - turn the engine's **own** camera by posting `WM_MOUSEMOVE`; no focus needed. Consumed on sight, so one write is one turn (`tools/look.ps1`) |
 | `h47vr-camread.txt` | live MouseConCam pose: `yaw`, engine `pitch` (elevation, positive up), the player-relative offset, camera pointer, epoch and update count |
-| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale>` sets eye separation (`tools/stereo.ps1`) |
+| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm`, `units_per_m`, `camera_lower`, `camera_forward` and `head_near` configure eye separation and first-person alignment (`tools/stereo.ps1`) |
 | `h47vr-openxr.txt` | while present, initialize OpenXR on the game's WGL context and use predicted eye X positions when available (`tools/openxr.ps1`) |
 | `h47vr-openxr-runtime.txt` | optional process-local `XR_RUNTIME_JSON` path for testing another runtime without changing the machine registry |
 | `h47vr-mirror.txt` | `layout=left\|right\|sbs` - blit the completed OpenXR eye image into the game window (`tools/mirror.ps1`) |
@@ -679,8 +687,8 @@ Two things the injected rotation cannot do, both worth remembering:
 - **Side-by-side stereo loop.** The renderer's face-list consumer (`0x3680`) is
   called twice only while the perspective projection is current. Each eye gets
   its own half-viewport, a 0.5 X projection scale and an eye-space X offset from
-  `h47vr-stereo.txt`; the current profile uses 67 mm and 100 game units/metre
-  (6.7 units). The original viewport and matrix mode are restored after each
+  `h47vr-stereo.txt`; the current Quest profile uses 67 mm and 110 game
+  units/metre (7.37 units). The original viewport and matrix mode are restored after each
   pass. The first capture showed 21.46 mean channel difference from the normal
   view and 7.41 between left and right at the initial 10-unit test separation,
   with 60 FPS retained. Simulation is not duplicated because this function

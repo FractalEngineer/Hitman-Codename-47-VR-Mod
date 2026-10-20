@@ -7,6 +7,7 @@ struct CameraReadback {
     float yaw = 0.0f;
     float pitch = 0.0f;
     float offset[3] = {};
+    float anchor[3] = {};
     float cameraPosition[3] = {};
     void* object = nullptr;
     unsigned long updates = 0;

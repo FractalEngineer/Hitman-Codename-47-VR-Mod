@@ -25,6 +25,7 @@ namespace {
 constexpr float kDefaultIpdMillimetres = 67.0f;
 constexpr float kDefaultGameUnitsPerMetre = 100.0f;
 constexpr float kDefaultCameraLowerUnits = 0.0f;
+constexpr float kDefaultCameraForwardUnits = 0.0f;
 constexpr float kDefaultHeadClipNearUnits = 0.0f;
 
 std::wstring g_control_path;
@@ -32,6 +33,7 @@ std::atomic<bool> g_active{false};
 std::atomic<float> g_eye_separation{kDefaultIpdMillimetres /
                                    (1000.0f / kDefaultGameUnitsPerMetre)};
 std::atomic<float> g_camera_lower_units{kDefaultCameraLowerUnits};
+std::atomic<float> g_camera_forward_units{kDefaultCameraForwardUnits};
 std::atomic<float> g_head_clip_near_units{kDefaultHeadClipNearUnits};
 std::atomic<unsigned long> g_world_draws{0};
 std::atomic<unsigned long> g_stereo_passes{0};
@@ -43,6 +45,7 @@ float g_loaded_separation = kDefaultIpdMillimetres /
 float g_loaded_ipd_mm = kDefaultIpdMillimetres;
 float g_loaded_units_per_metre = kDefaultGameUnitsPerMetre;
 float g_loaded_camera_lower_units = kDefaultCameraLowerUnits;
+float g_loaded_camera_forward_units = kDefaultCameraForwardUnits;
 float g_loaded_head_clip_near_units = kDefaultHeadClipNearUnits;
 std::wstring g_state_path;
 bool g_gameplay_active = false;
@@ -71,6 +74,7 @@ void WriteState() {
          << " stereo=" << (g_active.load() ? 1 : 0)
          << " eye_separation=" << g_eye_separation.load()
          << " camera_lower=" << g_camera_lower_units.load()
+         << " camera_forward=" << g_camera_forward_units.load()
          << " head_near=" << g_head_clip_near_units.load()
          << " stereo_passes=" << g_stereo_passes.load()
          << " theater_passes=" << g_theater_passes.load() << "\n";
@@ -131,11 +135,13 @@ void RefreshStereo() {
     float ipdMm = kDefaultIpdMillimetres;
     float unitsPerMetre = kDefaultGameUnitsPerMetre;
     float cameraLowerUnits = kDefaultCameraLowerUnits;
+    float cameraForwardUnits = kDefaultCameraForwardUnits;
     float headClipNearUnits = kDefaultHeadClipNearUnits;
     float legacySeparation = 0.0f;
     ReadNumber(line, "ipd_mm", &ipdMm);
     ReadNumber(line, "units_per_m", &unitsPerMetre);
     ReadNumber(line, "camera_lower", &cameraLowerUnits);
+    ReadNumber(line, "camera_forward", &cameraForwardUnits);
     ReadNumber(line, "head_near", &headClipNearUnits);
     const bool hasLegacySeparation = ReadNumber(line, "ipd", &legacySeparation);
     if (unitsPerMetre <= 1.0f || unitsPerMetre > 100000.0f) {
@@ -143,6 +149,9 @@ void RefreshStereo() {
     }
     if (!(cameraLowerUnits >= -100.0f && cameraLowerUnits <= 100.0f)) {
         cameraLowerUnits = kDefaultCameraLowerUnits;
+    }
+    if (!(cameraForwardUnits >= -100.0f && cameraForwardUnits <= 100.0f)) {
+        cameraForwardUnits = kDefaultCameraForwardUnits;
     }
     if (!(headClipNearUnits >= 0.0f && headClipNearUnits <= 1000.0f)) {
         headClipNearUnits = kDefaultHeadClipNearUnits;
@@ -159,20 +168,23 @@ void RefreshStereo() {
     if (!wasActive || separation != g_loaded_separation ||
         ipdMm != g_loaded_ipd_mm || unitsPerMetre != g_loaded_units_per_metre ||
         cameraLowerUnits != g_loaded_camera_lower_units ||
+        cameraForwardUnits != g_loaded_camera_forward_units ||
         headClipNearUnits != g_loaded_head_clip_near_units) {
         g_loaded_separation = separation;
         g_loaded_ipd_mm = ipdMm;
         g_loaded_units_per_metre = unitsPerMetre;
         g_loaded_camera_lower_units = cameraLowerUnits;
+        g_loaded_camera_forward_units = cameraForwardUnits;
         g_loaded_head_clip_near_units = headClipNearUnits;
         g_eye_separation = separation;
         g_camera_lower_units = cameraLowerUnits;
+        g_camera_forward_units = cameraForwardUnits;
         g_head_clip_near_units = headClipNearUnits;
         H47VR_LOG_INFO("stereo: on, IPD %.1f mm = %.3f game units "
-                       "(%.1f game units/metre), camera lower %.1f, head near "
-                       "%.1f units",
+                       "(%.1f game units/metre), camera lower %.1f, forward "
+                       "%.1f, head near %.1f units",
                        ipdMm, separation, unitsPerMetre, cameraLowerUnits,
-                       headClipNearUnits);
+                       cameraForwardUnits, headClipNearUnits);
     }
 }
 
@@ -279,6 +291,10 @@ StereoMode StereoRendererMode() {
 
 float StereoRendererCameraLowerUnits() {
     return g_camera_lower_units.load();
+}
+
+float StereoRendererCameraForwardUnits() {
+    return g_camera_forward_units.load();
 }
 
 void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {

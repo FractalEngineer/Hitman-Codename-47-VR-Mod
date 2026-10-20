@@ -1,6 +1,7 @@
 #include "h47vr/openxr_pose.hpp"
 
 #include "h47vr/gl_probe.hpp"
+#include "h47vr/controller_input.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/look_driver.hpp"
 #include "h47vr/mod.hpp"
@@ -44,6 +45,19 @@ XrSystemId g_system = XR_NULL_SYSTEM_ID;
 XrSession g_session = XR_NULL_HANDLE;
 XrSpace g_local_space = XR_NULL_HANDLE;
 XrSessionState g_session_state = XR_SESSION_STATE_UNKNOWN;
+XrActionSet g_action_set = XR_NULL_HANDLE;
+XrAction g_move_action = XR_NULL_HANDLE;
+XrAction g_turn_action = XR_NULL_HANDLE;
+XrAction g_escape_action = XR_NULL_HANDLE;
+XrAction g_snap_action = XR_NULL_HANDLE;
+bool g_actions_ready = false;
+bool g_action_sync_warned = false;
+
+enum class MirrorLayout { Off, Left, Right, SideBySide };
+std::wstring g_mirror_path;
+MirrorLayout g_mirror_layout = MirrorLayout::Off;
+MirrorLayout g_reported_mirror_layout = MirrorLayout::Off;
+unsigned int g_mirror_ticks = 0;
 
 // Minimal OpenGL entry points for attaching XR swapchain textures to FBOs and
 // scaling the engine's completed backbuffer into them. The engine itself is GL
@@ -63,6 +77,8 @@ constexpr GLenum kGlSrgb8Alpha8 = 0x8C43;
 constexpr GLenum kGlRgba8 = 0x8058;
 constexpr GLenum kGlDepthComponent24 = 0x81A6;
 constexpr GLenum kGlScissorTest = 0x0C11;
+constexpr GLenum kGlViewportEnum = 0x0BA2;
+constexpr GLenum kGlNearest = 0x2600;
 constexpr GLbitfield kGlColorBufferBit = 0x00004000;
 constexpr GLbitfield kGlDepthBufferBit = 0x00000100;
 constexpr GLbitfield kGlAllAttribBits = 0xFFFFFFFF;
@@ -158,6 +174,186 @@ void InvalidatePose() {
     std::lock_guard<std::mutex> lock(g_pose_mutex);
     g_pose.valid = false;
     g_pose.fovValid = false;
+}
+
+bool Succeeded(XrResult result, const char* step);
+
+bool ActionPath(const char* text, XrPath* path) {
+    return text != nullptr && path != nullptr &&
+           XR_SUCCEEDED(::xrStringToPath(g_instance, text, path));
+}
+
+bool SuggestBindings(
+    const char* profile,
+    const std::vector<std::pair<XrAction, const char*>>& bindings) {
+    XrPath profilePath = XR_NULL_PATH;
+    if (!Succeeded(::xrStringToPath(g_instance, profile, &profilePath),
+                   "xrStringToPath (interaction profile)")) {
+        return false;
+    }
+    std::vector<XrActionSuggestedBinding> suggested;
+    suggested.reserve(bindings.size());
+    for (const auto& binding : bindings) {
+        XrPath path = XR_NULL_PATH;
+        if (!ActionPath(binding.second, &path)) {
+            return false;
+        }
+        suggested.push_back({binding.first, path});
+    }
+    XrInteractionProfileSuggestedBinding info{
+        XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
+    info.interactionProfile = profilePath;
+    info.countSuggestedBindings =
+        static_cast<uint32_t>(suggested.size());
+    info.suggestedBindings = suggested.data();
+    return XR_SUCCEEDED(::xrSuggestInteractionProfileBindings(
+        g_instance, &info));
+}
+
+bool CreateInputActions() {
+    XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strcpy_s(setInfo.actionSetName, "h47vr_gameplay");
+    strcpy_s(setInfo.localizedActionSetName, "Hitman VR gameplay");
+    setInfo.priority = 0;
+    if (!Succeeded(::xrCreateActionSet(g_instance, &setInfo, &g_action_set),
+                   "xrCreateActionSet")) {
+        return false;
+    }
+
+    auto createAction = [](const char* name, const char* localized,
+                           XrActionType type, XrAction* action) -> bool {
+        XrActionCreateInfo info{XR_TYPE_ACTION_CREATE_INFO};
+        strcpy_s(info.actionName, name);
+        strcpy_s(info.localizedActionName, localized);
+        info.actionType = type;
+        return XR_SUCCEEDED(::xrCreateAction(g_action_set, &info, action));
+    };
+
+    if (!createAction("move", "Move", XR_ACTION_TYPE_VECTOR2F_INPUT,
+                      &g_move_action) ||
+        !createAction("turn", "Turn", XR_ACTION_TYPE_VECTOR2F_INPUT,
+                      &g_turn_action) ||
+        !createAction("escape", "Skip cinematic or back",
+                      XR_ACTION_TYPE_BOOLEAN_INPUT, &g_escape_action) ||
+        !createAction("snap", "Snap turn", XR_ACTION_TYPE_BOOLEAN_INPUT,
+                      &g_snap_action)) {
+        H47VR_LOG_WARN("openxr: could not create controller actions");
+        return false;
+    }
+
+    const std::vector<std::pair<XrAction, const char*>> oculus = {
+        {g_move_action, "/user/hand/left/input/thumbstick"},
+        {g_turn_action, "/user/hand/right/input/thumbstick"},
+        {g_escape_action, "/user/hand/right/input/a/click"},
+        {g_escape_action, "/user/hand/right/input/b/click"},
+        {g_snap_action, "/user/hand/right/input/thumbstick/click"},
+    };
+    const std::vector<std::pair<XrAction, const char*>> valve = {
+        {g_move_action, "/user/hand/left/input/thumbstick"},
+        {g_turn_action, "/user/hand/right/input/thumbstick"},
+        {g_escape_action, "/user/hand/right/input/a/click"},
+        {g_escape_action, "/user/hand/right/input/b/click"},
+        {g_snap_action, "/user/hand/right/input/thumbstick/click"},
+    };
+    const std::vector<std::pair<XrAction, const char*>> microsoft = {
+        {g_move_action, "/user/hand/left/input/thumbstick"},
+        {g_turn_action, "/user/hand/right/input/thumbstick"},
+        {g_escape_action, "/user/hand/right/input/menu/click"},
+        {g_snap_action, "/user/hand/right/input/thumbstick/click"},
+    };
+
+    const bool oculusOk = SuggestBindings(
+        "/interaction_profiles/oculus/touch_controller", oculus);
+    const bool valveOk = SuggestBindings(
+        "/interaction_profiles/valve/index_controller", valve);
+    const bool microsoftOk = SuggestBindings(
+        "/interaction_profiles/microsoft/motion_controller", microsoft);
+
+    XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
+    attach.countActionSets = 1;
+    attach.actionSets = &g_action_set;
+    if (!Succeeded(::xrAttachSessionActionSets(g_session, &attach),
+                   "xrAttachSessionActionSets")) {
+        return false;
+    }
+    g_actions_ready = true;
+    g_action_sync_warned = false;
+    H47VR_LOG_INFO("openxr: controller actions ready (oculus=%s index=%s "
+                   "microsoft=%s)",
+                   oculusOk ? "yes" : "no", valveOk ? "yes" : "no",
+                   microsoftOk ? "yes" : "no");
+    return true;
+}
+
+void DestroyInputActions() {
+    g_actions_ready = false;
+    g_move_action = XR_NULL_HANDLE;
+    g_turn_action = XR_NULL_HANDLE;
+    g_escape_action = XR_NULL_HANDLE;
+    g_snap_action = XR_NULL_HANDLE;
+    if (g_action_set != XR_NULL_HANDLE) {
+        ::xrDestroyActionSet(g_action_set);
+        g_action_set = XR_NULL_HANDLE;
+    }
+    ControllerInputPublish(ControllerInputSnapshot{});
+}
+
+void SyncInputActions() {
+    if (!g_actions_ready || g_session == XR_NULL_HANDLE ||
+        !g_session_running.load()) {
+        return;
+    }
+    XrActiveActionSet active{g_action_set, XR_NULL_PATH};
+    XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
+    sync.countActiveActionSets = 1;
+    sync.activeActionSets = &active;
+    const XrResult result = ::xrSyncActions(g_session, &sync);
+    if (XR_FAILED(result)) {
+        if (!g_action_sync_warned) {
+            g_action_sync_warned = true;
+            H47VR_LOG_WARN("openxr: xrSyncActions failed (%d)",
+                           static_cast<int>(result));
+        }
+        return;
+    }
+
+    XrActionStateVector2f move{XR_TYPE_ACTION_STATE_VECTOR2F};
+    XrActionStateVector2f turn{XR_TYPE_ACTION_STATE_VECTOR2F};
+    XrActionStateBoolean escape{XR_TYPE_ACTION_STATE_BOOLEAN};
+    XrActionStateBoolean snap{XR_TYPE_ACTION_STATE_BOOLEAN};
+
+    ControllerInputSnapshot state;
+    const auto getVector = [](XrActionStateVector2f& out, XrAction action,
+                              float magnitudeThreshold) {
+        XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+        info.action = action;
+        if (XR_FAILED(::xrGetActionStateVector2f(g_session, &info, &out))) {
+            return false;
+        }
+        return out.isActive && std::sqrt(out.currentState.x * out.currentState.x +
+                                         out.currentState.y * out.currentState.y) >=
+                                  magnitudeThreshold;
+    };
+    const auto getBoolean = [](XrActionStateBoolean& out, XrAction action) {
+        XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO};
+        info.action = action;
+        return XR_SUCCEEDED(::xrGetActionStateBoolean(g_session, &info, &out)) &&
+               out.isActive;
+    };
+
+    state.leftActive = getVector(move, g_move_action, 0.0f);
+    state.rightActive = getVector(turn, g_turn_action, 0.0f);
+    state.leftX = move.currentState.x;
+    state.leftY = move.currentState.y;
+    state.rightX = turn.currentState.x;
+    state.rightY = turn.currentState.y;
+    const bool escapeActive = getBoolean(escape, g_escape_action);
+    const bool snapActive = getBoolean(snap, g_snap_action);
+    state.valid = state.leftActive || state.rightActive ||
+                  escapeActive || snapActive;
+    state.escapeDown = escapeActive && escape.currentState;
+    state.snapDown = snapActive && snap.currentState;
+    ControllerInputPublish(state);
 }
 
 bool Succeeded(XrResult result, const char* step) {
@@ -366,6 +562,7 @@ void DestroyGraphics() {
 
 void ShutdownXr() {
     DestroyGraphics();
+    DestroyInputActions();
     if (g_session != XR_NULL_HANDLE) {
         if (g_session_running.exchange(false)) {
             ::xrEndSession(g_session);
@@ -657,6 +854,7 @@ bool Initialize(HDC device) {
                    "xrCreateSession (OpenGL Win32 binding)")) {
         return false;
     }
+    CreateInputActions();
 
     XrReferenceSpaceCreateInfo spaceInfo{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
     spaceInfo.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
@@ -739,6 +937,222 @@ bool BlitBackbufferToEye(int eye, uint32_t imageIndex, int sourceLeft,
     g_gl_bind_framebuffer(kGlDrawFramebuffer,
                           static_cast<GLuint>(previousDraw));
     return true;
+}
+
+void RefreshMirrorLayout() {
+    if (g_mirror_path.empty() || (++g_mirror_ticks & 0x1F) != 0) {
+        return;
+    }
+    MirrorLayout layout = MirrorLayout::Off;
+    if (::GetFileAttributesW(g_mirror_path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        const std::wstring line = ReadFirstWideLine(g_mirror_path);
+        if (line.find(L"left") != std::wstring::npos) {
+            layout = MirrorLayout::Left;
+        } else if (line.find(L"right") != std::wstring::npos) {
+            layout = MirrorLayout::Right;
+        } else if (line.find(L"sbs") != std::wstring::npos ||
+                   line.find(L"side") != std::wstring::npos) {
+            layout = MirrorLayout::SideBySide;
+        }
+    }
+    if (layout != g_reported_mirror_layout) {
+        g_reported_mirror_layout = layout;
+        const char* name = layout == MirrorLayout::Left
+                               ? "left"
+                               : (layout == MirrorLayout::Right
+                                      ? "right"
+                                      : (layout == MirrorLayout::SideBySide
+                                             ? "side-by-side"
+                                             : "off"));
+        H47VR_LOG_INFO("openxr: desktop XR mirror %s", name);
+    }
+    g_mirror_layout = layout;
+}
+
+void FitRect(int sourceWidth, int sourceHeight, int boxX, int boxY,
+             int boxWidth, int boxHeight, int* outX, int* outY, int* outWidth,
+             int* outHeight) {
+    const double sourceAspect =
+        sourceHeight > 0 ? static_cast<double>(sourceWidth) / sourceHeight : 1.0;
+    const double boxAspect =
+        boxHeight > 0 ? static_cast<double>(boxWidth) / boxHeight : 1.0;
+    if (sourceAspect >= boxAspect) {
+        *outWidth = boxWidth;
+        *outHeight = static_cast<int>(boxWidth / sourceAspect + 0.5);
+    } else {
+        *outHeight = boxHeight;
+        *outWidth = static_cast<int>(boxHeight * sourceAspect + 0.5);
+    }
+    *outX = boxX + (boxWidth - *outWidth) / 2;
+    *outY = boxY + (boxHeight - *outHeight) / 2;
+}
+
+bool DumpMirroredWindow(int width, int height) {
+    const std::wstring trigger =
+        JoinPath(mod::GameDirectory(), L"h47vr-mirror-capture.txt");
+    if (::GetFileAttributesW(trigger.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        return false;
+    }
+    ::DeleteFileW(trigger.c_str());
+    if (g_gl_read_pixels == nullptr || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    std::vector<unsigned char> rgba(
+        static_cast<size_t>(width) * height * 4, 0);
+    g_gl_read_pixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE,
+                     rgba.data());
+
+    const std::wstring path =
+        JoinPath(mod::GameDirectory(), L"h47vr-mirror-capture.bmp");
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        return false;
+    }
+    const uint32_t imageBytes =
+        static_cast<uint32_t>(width) * height * 4;
+    const uint32_t fileBytes = 54 + imageBytes;
+    const uint8_t header[54] = {
+        'B', 'M',
+        static_cast<uint8_t>(fileBytes), static_cast<uint8_t>(fileBytes >> 8),
+        static_cast<uint8_t>(fileBytes >> 16),
+        static_cast<uint8_t>(fileBytes >> 24),
+        0, 0, 0, 0, 54, 0, 0, 0,
+        40, 0, 0, 0,
+        static_cast<uint8_t>(width), static_cast<uint8_t>(width >> 8),
+        static_cast<uint8_t>(width >> 16),
+        static_cast<uint8_t>(width >> 24),
+        static_cast<uint8_t>(height), static_cast<uint8_t>(height >> 8),
+        static_cast<uint8_t>(height >> 16),
+        static_cast<uint8_t>(height >> 24),
+        1, 0, 32, 0, 0, 0, 0, 0,
+        static_cast<uint8_t>(imageBytes), static_cast<uint8_t>(imageBytes >> 8),
+        static_cast<uint8_t>(imageBytes >> 16),
+        static_cast<uint8_t>(imageBytes >> 24),
+        0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    file.write(reinterpret_cast<const char*>(header), sizeof(header));
+    std::vector<unsigned char> bgra(rgba.size());
+    for (size_t i = 0; i < rgba.size(); i += 4) {
+        bgra[i] = rgba[i + 2];
+        bgra[i + 1] = rgba[i + 1];
+        bgra[i + 2] = rgba[i];
+        bgra[i + 3] = 255;
+    }
+    file.write(reinterpret_cast<const char*>(bgra.data()),
+               static_cast<std::streamsize>(bgra.size()));
+    H47VR_LOG_INFO("openxr: wrote mirrored XR image to %s",
+                   Narrow(path).c_str());
+    return true;
+}
+
+void MirrorDirectTargetsToWindow() {
+    RefreshMirrorLayout();
+    if (g_mirror_layout == MirrorLayout::Off ||
+        g_gl_blit_framebuffer == nullptr || g_gl_get_integer == nullptr) {
+        return;
+    }
+
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+    if (!GlStereoSourceSize(&sourceWidth, &sourceHeight) ||
+        sourceWidth <= 0 || sourceHeight <= 0) {
+        return;
+    }
+
+    GLint previousRead = 0;
+    GLint previousDraw = 0;
+    GLint previousViewport[4] = {};
+    g_gl_get_integer(kGlReadFramebufferBinding, &previousRead);
+    g_gl_get_integer(kGlDrawFramebufferBinding, &previousDraw);
+    g_gl_get_integer(kGlViewportEnum, previousViewport);
+    g_gl_push_attrib(kGlAllAttribBits);
+    g_gl_disable(kGlScissorTest);
+    g_gl_color_mask(1, 1, 1, 1);
+    g_gl_depth_mask(0);
+    g_gl_bind_framebuffer(kGlDrawFramebuffer, 0);
+    g_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+    g_gl_clear(kGlColorBufferBit);
+
+    auto blit = [&](int eye, int boxX, int boxY, int boxWidth, int boxHeight) {
+        const uint32_t imageIndex = g_acquired_images[eye];
+        if (imageIndex == UINT32_MAX) {
+            return;
+        }
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+        FitRect(static_cast<int>(g_eyes[eye].width),
+                static_cast<int>(g_eyes[eye].height), boxX, boxY, boxWidth,
+                boxHeight, &x, &y, &width, &height);
+        g_gl_bind_framebuffer(
+            kGlReadFramebuffer, g_eyes[eye].framebuffers[imageIndex]);
+        g_gl_blit_framebuffer(
+            0, 0, static_cast<GLint>(g_eyes[eye].width),
+            static_cast<GLint>(g_eyes[eye].height), x, y, x + width,
+            y + height, GL_COLOR_BUFFER_BIT, kGlNearest);
+    };
+
+    if (g_mirror_layout == MirrorLayout::Left) {
+        blit(0, 0, 0, sourceWidth, sourceHeight);
+    } else if (g_mirror_layout == MirrorLayout::Right) {
+        blit(1, 0, 0, sourceWidth, sourceHeight);
+    } else {
+        const int leftWidth = sourceWidth / 2;
+        const int rightWidth = sourceWidth - leftWidth;
+        blit(0, 0, 0, leftWidth, sourceHeight);
+        blit(1, leftWidth, 0, rightWidth, sourceHeight);
+    }
+
+    g_gl_bind_framebuffer(kGlReadFramebuffer, 0);
+    if (DumpMirroredWindow(sourceWidth, sourceHeight)) {
+        H47VR_LOG_INFO("openxr: desktop mirror capture completed");
+    }
+
+    static unsigned long mirrorFrames = 0;
+    if (++mirrorFrames % 120 == 0 && g_gl_read_pixels != nullptr) {
+        constexpr int kSampleSize = 128;
+        const GLint sampleX = (sourceWidth - kSampleSize) / 2;
+        const GLint sampleY = (sourceHeight - kSampleSize) / 2;
+        std::vector<float> pixels(kSampleSize * kSampleSize * 4, 0.0f);
+        g_gl_bind_framebuffer(kGlReadFramebuffer, 0);
+        g_gl_read_pixels(sampleX, sampleY, kSampleSize, kSampleSize, GL_RGBA,
+                         GL_FLOAT, pixels.data());
+        float mean = 0.0f;
+        float peak = 0.0f;
+        for (int i = 0; i < kSampleSize * kSampleSize; ++i) {
+            const float luminance =
+                (pixels[i * 4] + pixels[i * 4 + 1] + pixels[i * 4 + 2]) / 3.0f;
+            mean += luminance;
+            peak = (std::max)(peak, luminance);
+        }
+        mean /= static_cast<float>(kSampleSize * kSampleSize);
+        H47VR_LOG_INFO("openxr: desktop mirror check mean %.4f peak %.4f "
+                       "(%ux%u window viewport)",
+                       mean, peak, sourceWidth, sourceHeight);
+    }
+
+    g_gl_bind_framebuffer(kGlReadFramebuffer,
+                          static_cast<GLuint>(previousRead));
+    g_gl_bind_framebuffer(kGlDrawFramebuffer,
+                          static_cast<GLuint>(previousDraw));
+    g_gl_pop_attrib();
+    g_gl_bind_framebuffer(kGlReadFramebuffer,
+                          static_cast<GLuint>(previousRead));
+    g_gl_bind_framebuffer(kGlDrawFramebuffer,
+                          static_cast<GLuint>(previousDraw));
+
+    HMODULE openGl = LoadedModule(L"opengl32.dll");
+    if (openGl != nullptr) {
+        using ViewportFn = void(APIENTRY*)(GLint, GLint, GLsizei, GLsizei);
+        auto viewport = reinterpret_cast<ViewportFn>(
+            ::GetProcAddress(openGl, "glViewport"));
+        if (viewport != nullptr) {
+            viewport(previousViewport[0], previousViewport[1],
+                     previousViewport[2], previousViewport[3]);
+        }
+    }
 }
 
 void SetSubImage(XrSwapchainSubImage* subImage, int eye) {
@@ -1062,6 +1476,9 @@ void FinishRenderFrame(StereoMode mode) {
                                              : "theater quad"));
             }
         }
+        if (direct) {
+            MirrorDirectTargetsToWindow();
+        }
     } else {
         g_last_submitted_mode = -1;
     }
@@ -1143,6 +1560,7 @@ bool OpenXrPoseStart() {
     g_gate_path = JoinPath(mod::GameDirectory(), L"h47vr-openxr.txt");
     g_runtime_path =
         JoinPath(mod::GameDirectory(), L"h47vr-openxr-runtime.txt");
+    g_mirror_path = JoinPath(mod::GameDirectory(), L"h47vr-mirror.txt");
     ApplyRuntimeOverride();
     H47VR_LOG_INFO("openxr pose backend: ready - create %s to enable pose tests",
                    Narrow(g_gate_path).c_str());
@@ -1187,6 +1605,7 @@ void OpenXrPoseFrame(HDC device, unsigned long frame) {
         LookDriverSetHeadPose(false, 0.0, 0.0);
         return;
     }
+    SyncInputActions();
     if (!g_render_frame_open && !StartRenderFrame()) {
         LookDriverSetHeadPose(false, 0.0, 0.0);
         return;

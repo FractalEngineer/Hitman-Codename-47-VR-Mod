@@ -1,6 +1,7 @@
 #include "h47vr/look_driver.hpp"
 
 #include "h47vr/camera_readback.hpp"
+#include "h47vr/controller_input.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
@@ -27,8 +28,10 @@ std::atomic<unsigned long> g_messages{0};
 std::atomic<unsigned long> g_post_failures{0};
 std::atomic<unsigned long> g_warp_swallowed{0};
 std::atomic<unsigned long> g_head_posts{0};
+std::atomic<unsigned long> g_native_posts{0};
 std::atomic<bool> g_cursor_guard{false};
 std::atomic<double> g_scene_pitch_degrees{0.0};
+std::atomic<bool> g_native_path_ready{false};
 
 // One turn in flight. The turn is split across frames the way a hand moves a
 // mouse, because the engine's handler returns early when the delta is zero and
@@ -71,6 +74,9 @@ double g_head_reference_pitch = 0.0;
 // corrections from prediction noise.
 constexpr double kHeadDeadbandDegrees = 0.15;
 constexpr int kHeadMaxPixelsPerFrame = 96;
+constexpr double kNativeMaxYawStepDegrees = 8.0;
+constexpr double kControllerTurnDegreesPerSecond = 120.0;
+constexpr double kSnapTurnDegrees = 30.0;
 
 // Dead reckoning of what we have asked the engine's camera to do. The engine
 // integrates the deltas we post into the player's aim, so this stays true as
@@ -88,6 +94,14 @@ double g_px_y = 0.0;
 constexpr double kReadbackDegPerPixel = 0.1289156;
 double g_deg_per_px = kReadbackDegPerPixel;
 double g_turn_deg_per_px = kReadbackDegPerPixel;
+unsigned long long g_last_snap_generation = 0;
+ULONGLONG g_last_controller_turn_tick = 0;
+
+std::wstring g_debug_head_path;
+std::wstring g_native_pitch_path;
+bool g_debug_head_active = false;
+std::atomic<bool> g_native_pitch_enabled{false};
+std::atomic<unsigned long> g_native_pitch_posts{0};
 
 // Absolute aim stays relative to the first MouseConCam pose seen for the
 // current camera object. That preserves `yaw=0` as a recentre even though the
@@ -495,7 +509,14 @@ void ApplyHeadPose(unsigned long frame) {
     // Pitch is rendered directly at the GL seam. Driving it through the
     // MouseConCam input path moves the follow-camera pivot vertically and
     // caused a slow sink through the floor.
-    g_scene_pitch_degrees = errorPitch;
+    g_scene_pitch_degrees =
+        g_native_pitch_enabled.load() ? 0.0f : static_cast<float>(errorPitch);
+    if (g_native_path_ready.load()) {
+        // The yaw correction was already handed to MouseConCam before the
+        // engine updated its camera. Keep the legacy posting path only for a
+        // readback state that cannot reach the native hook.
+        return;
+    }
     if (std::fabs(errorYaw) < kHeadDeadbandDegrees) {
         return;
     }
@@ -518,9 +539,37 @@ void ApplyHeadPose(unsigned long frame) {
     }
 }
 
+bool ReadHeadPoseTest(double* yaw, double* pitch) {
+    if (g_debug_head_path.empty() ||
+        ::GetFileAttributesW(g_debug_head_path.c_str()) ==
+            INVALID_FILE_ATTRIBUTES) {
+        return false;
+    }
+    const std::string line = ReadFirstLine(g_debug_head_path);
+    if (line.empty()) {
+        return false;
+    }
+    const std::size_t yawAt = line.find("yaw=");
+    const std::size_t pitchAt = line.find("pitch=");
+    if (yawAt == std::string::npos && pitchAt == std::string::npos) {
+        return false;
+    }
+    *yaw = yawAt != std::string::npos
+               ? std::atof(line.c_str() + yawAt + 4)
+               : 0.0;
+    *pitch = pitchAt != std::string::npos
+                 ? std::atof(line.c_str() + pitchAt + 6)
+                 : 0.0;
+    return true;
+}
+
 }  // namespace
 
 bool LookDriverStart() {
+    g_debug_head_path =
+        JoinPath(mod::GameDirectory(), L"h47vr-headpose.txt");
+    g_native_pitch_path =
+        JoinPath(mod::GameDirectory(), L"h47vr-nativepitch.txt");
     LookDriverRearm();
     WriteState();
     H47VR_LOG_INFO("look driver: ready - write %s with 'dx=.. dy=..' to turn the "
@@ -532,6 +581,131 @@ bool LookDriverStart() {
                    g_deg_per_px,
                    Narrow(JoinPath(mod::GameDirectory(), L"h47vr-lookstate.txt")).c_str());
     return true;
+}
+
+void LookDriverApplyNativeYaw() {
+    if (g_steps_done < g_steps_total) {
+        return;
+    }
+
+    CameraReadback readback;
+    double currentYaw = 0.0;
+    double currentPitch = 0.0;
+    if (!ReadCurrentAim(&currentYaw, &currentPitch, &readback)) {
+        return;
+    }
+
+    const ULONGLONG now = ::GetTickCount64();
+    const double controllerDt =
+        g_last_controller_turn_tick == 0
+            ? 0.0
+            : std::clamp((now - g_last_controller_turn_tick) / 1000.0, 0.0,
+                         0.05);
+    g_last_controller_turn_tick = now;
+
+    double yawDelta = 0.0;
+    if (g_head_valid && g_head_reference_valid) {
+        const double targetYaw = Wrap180(g_head_yaw - g_head_reference_yaw);
+        const double errorYaw = Wrap180(targetYaw - currentYaw);
+        if (std::fabs(errorYaw) >= kHeadDeadbandDegrees) {
+            yawDelta += std::clamp(
+                errorYaw, -kNativeMaxYawStepDegrees, kNativeMaxYawStepDegrees);
+        }
+    }
+
+    const ControllerInputSnapshot controller = ControllerInputGet();
+    double controllerTurnDegrees = 0.0;
+    if (controller.valid) {
+        if (std::fabs(controller.rightX) >= 0.08f) {
+            controllerTurnDegrees += controller.rightX *
+                                     kControllerTurnDegreesPerSecond *
+                                         controllerDt;
+        }
+        if (controller.snapDown && controller.snapGeneration != 0 &&
+            controller.snapGeneration != g_last_snap_generation) {
+            g_last_snap_generation = controller.snapGeneration;
+            controllerTurnDegrees += controller.rightX < -0.08f
+                                         ? -kSnapTurnDegrees
+                                         : kSnapTurnDegrees;
+        }
+    }
+    // A controller turn rotates the player body, not the physical head. Move
+    // the head reference with it or the absolute head target would immediately
+    // pull the camera back to its pre-turn orientation.
+    if (std::fabs(controllerTurnDegrees) > 0.0001) {
+        yawDelta += controllerTurnDegrees;
+        if (g_head_valid && g_head_reference_valid) {
+            g_head_reference_yaw = Wrap180(g_head_reference_yaw -
+                                           controllerTurnDegrees);
+        }
+    }
+
+    const bool nativePitchActive =
+        g_native_pitch_enabled.load() && g_head_valid &&
+        g_head_reference_valid;
+    if (std::fabs(yawDelta) < 0.001 && !nativePitchActive) {
+        g_native_path_ready = true;
+        return;
+    }
+
+    void* slot = ResolveSymbol(
+        L"Globals.dll", "?g_pSysInterface@@3PAVZSysInterface@@A");
+    if (slot == nullptr) {
+        return;
+    }
+    auto* sysInterface = *reinterpret_cast<unsigned char**>(slot);
+    if (sysInterface == nullptr) {
+        return;
+    }
+
+    double pixels = yawDelta / kReadbackDegPerPixel;
+    pixels = std::clamp(pixels, -static_cast<double>(kHeadMaxPixelsPerFrame),
+                        static_cast<double>(kHeadMaxPixelsPerFrame));
+    const int dx = static_cast<int>(pixels < 0.0 ? pixels - 0.5 : pixels + 0.5);
+    if (dx == 0 && !nativePitchActive) {
+        return;
+    }
+
+    if (dx != 0) {
+        auto* accumulator = reinterpret_cast<float*>(sysInterface + 0xa95);
+        *accumulator += static_cast<float>(dx);
+    }
+    g_native_path_ready = true;
+    const unsigned long count = dx != 0 ? ++g_native_posts : g_native_posts.load();
+    if (dx != 0 && (count == 1 || count % 300 == 0)) {
+        H47VR_LOG_INFO("look driver: native MouseConCam yaw %+.3f deg "
+                       "(%+d engine units), current yaw %.3f, camera %p, "
+                       "native corrections %lu",
+                       yawDelta, dx, currentYaw, readback.object, count);
+    }
+
+    if (nativePitchActive) {
+        const double targetPitch =
+            -(g_head_pitch - g_head_reference_pitch);
+        const double errorPitch = targetPitch - currentPitch;
+        if (std::fabs(errorPitch) >= kHeadDeadbandDegrees) {
+            const double pitchDelta = std::clamp(
+                errorPitch, -kNativeMaxYawStepDegrees, kNativeMaxYawStepDegrees);
+            double pitchPixels = pitchDelta / kReadbackDegPerPixel;
+            pitchPixels = std::clamp(
+                pitchPixels, -static_cast<double>(kHeadMaxPixelsPerFrame),
+                static_cast<double>(kHeadMaxPixelsPerFrame));
+            const int dy = static_cast<int>(
+                pitchPixels < 0.0 ? pitchPixels - 0.5 : pitchPixels + 0.5);
+            if (dy != 0) {
+                auto* accumulator =
+                    reinterpret_cast<float*>(sysInterface + 0xa99);
+                *accumulator += static_cast<float>(dy);
+                const unsigned long pitchCount = ++g_native_pitch_posts;
+                if (pitchCount == 1 || pitchCount % 300 == 0) {
+                    H47VR_LOG_INFO("look driver: native MouseConCam pitch "
+                                   "%+.3f deg (%+d engine units), current "
+                                   "pitch %.3f, corrections %lu",
+                                   pitchDelta, dy, currentPitch, pitchCount);
+                }
+            }
+        }
+    }
 }
 
 void LookDriverRearm() {
@@ -580,6 +754,32 @@ void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees) {
 }
 
 void LookDriverFrame(unsigned long frame) {
+    if (frame % 30 == 0) {
+        const bool nativePitch =
+            !g_native_pitch_path.empty() &&
+            ::GetFileAttributesW(g_native_pitch_path.c_str()) !=
+                INVALID_FILE_ATTRIBUTES;
+        if (nativePitch != g_native_pitch_enabled.exchange(nativePitch)) {
+            H47VR_LOG_INFO("look driver: native MouseConCam pitch %s",
+                           nativePitch ? "enabled" : "disabled");
+        }
+    }
+    if (frame % 30 == 0) {
+        WriteState();
+    }
+    double testYaw = 0.0;
+    double testPitch = 0.0;
+    if (ReadHeadPoseTest(&testYaw, &testPitch)) {
+        if (!g_debug_head_active) {
+            g_debug_head_active = true;
+            H47VR_LOG_INFO("look driver: head pose test override enabled");
+        }
+        LookDriverSetHeadPose(true, testYaw, testPitch);
+    } else if (g_debug_head_active) {
+        g_debug_head_active = false;
+        LookDriverSetHeadPose(false, 0.0, 0.0);
+        H47VR_LOG_INFO("look driver: head pose test override disabled");
+    }
     if (g_finish_frame != 0 && frame >= g_finish_frame) {
         if (!CameraReadbackGameplayActive() && frame < g_finish_deadline) {
             g_finish_frame = frame + 4;
@@ -666,11 +866,11 @@ void LookDriverReport(unsigned long frame) {
         H47VR_LOG_INFO("look driver: game window %p", WindowKeepaliveWindow());
     }
     H47VR_LOG_INFO("look driver: %lu turn(s), %lu mouse message(s) posted, %lu failed, "
-                   "%lu cursor warp(s) swallowed, head tracking %s (%lu correction(s), "
-                   "frame %lu)",
+                   "%lu cursor warp(s) swallowed, head tracking %s (%lu legacy, "
+                   "%lu native correction(s), frame %lu)",
                    g_turns.load(), g_messages.load(), g_post_failures.load(),
                    g_warp_swallowed.load(), g_head_valid ? "active" : "off",
-                   g_head_posts.load(), frame);
+                   g_head_posts.load(), g_native_posts.load(), frame);
 }
 
 }  // namespace h47vr

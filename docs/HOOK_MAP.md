@@ -143,7 +143,7 @@ headers; the modules are relocatable, so never hard-code the VA.
 
 | # | Target | Module | Symbol | RVA | Status |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Active camera / camera transform | `HitmanDlc.dlc` | `_ZCAMERA_MouseConCam` | `0x000264D0` | located, semantics unconfirmed |
+| 1 | Active camera / camera transform | `HitmanDlc.dlc` | `_ZCAMERA_MouseConCam` | `0x000264D0` | native yaw update hooked and verified |
 | 1a | Camera base | `HitmanDlc.dlc` | `_ZCAMERA_BaseCamera` | `0x00020E80` | located |
 | 1b | Camera control | `HitmanDlc.dlc` | `_ZCAMERA_MainCameraControl` | `0x00023940` | located |
 | 1c | Follow camera | `HitmanDlc.dlc` | `_ZCAMERA_NewFollowCam2` | `0x00029700` | located |
@@ -159,6 +159,8 @@ headers; the modules are relocatable, so never hard-code the VA.
 | 5b | Engine print | `System.dll` | `EditPrint` | `0x0000A770` | located |
 | 5c | Console / config command dispatcher | `System.dll` | (not exported) | `0x0000E590` | hooked, ABI confirmed from machine code |
 | 5d | Interface singleton for the dispatcher | `Globals.dll` | `?g_pSysInterface@@3PAVZSysInterface@@A` | `0x00003010` | located (singleton pointer) |
+| 5e | Native look accumulator | `Globals.dll` -> interface | `g_pSysInterface + 0xA95/+0xA99` | - | direct OpenXR yaw feed verified |
+| 5f | Per-key input state records | `Globals.dll` -> interface | `+0xAB6` edge / `+0xAB7` down, stride 15 | - | controller movement/menu bridge |
 | 6 | Weapon fire | `HitmanDlc.dlc` | `_ZITEM_FireShot` | `0x000EBA30` | located, semantics unconfirmed |
 | 7 | Interaction / pickup | `HitmanDlc.dlc` | `_ZGEOM_BasePickupTarget` | `0x0000D980` | located |
 | 7a | Interaction activate | `HitmanDlc.dlc` | `_ZGEOM_ItemActivate` | `0x00020240` | located |
@@ -166,6 +168,21 @@ headers; the modules are relocatable, so never hard-code the VA.
 
 `_ZGEOM_MsgActivate` and `_ZGEOM_MsgForward` are also exported and are the other
 half of the message path if the pickup route proves insufficient.
+
+### Native camera orientation
+
+`MouseConCam`'s per-frame update at RVA `0x26F20` rotates the camera offset
+vector at `+0x2D/+0x31/+0x35` through the native rotation helper at RVA
+`0x26300`. The input it consumes is the accumulated look delta at
+`g_pSysInterface + 0xA95/+0xA99`. The mod writes headset yaw directly into that
+accumulator immediately before calling the original update; no window message,
+cursor position or render-size assumption is involved. A synthetic 30-degree
+head pose changed the live readback from 0 to 30.0373 degrees with zero mouse
+messages posted.
+
+The older `WM_MOUSEMOVE` path remains only for manual `h47vr-look.txt` requests
+and migration fallback. The camera still performs its own translation,
+collision and visibility work.
 
 ### Renderer candidates
 
@@ -212,10 +229,11 @@ Two consequences for Milestone 2, both from measurement rather than inference:
   in one engine-owned camera state.
 - That engine-FOV substitution accepted the runtime union in the physical
   headset and produced the last good culling result. An extra 6-degree-per-side
-  margin was accepted too but did not change the visible residual edge; its
-  default is disabled. Future culling work should first reproduce the XR eye
-  image on the desktop, then inspect per-geometry visibility for the remaining
-  band rather than continuing to widen one symmetric angle.
+  margin was accepted too but did not change the visible residual edge; the
+  margin control has been removed. The XR eye image can now be mirrored to the
+  desktop, and that reproduction shows the remaining band becomes a half-frame
+  loss under 45-degree pitch. Future work should fix orientation-dependent
+  visibility rather than widening one symmetric angle.
 - The geometry `+0x398` path called by `CamUpdate` resolves to
   `HitmanDlc.dlc` RVA `0x95AE0`; its post-call probe is gated by
   `h47vr-camobj.txt`. Forcing the shared bounds predicate at `0xA1B60` did not

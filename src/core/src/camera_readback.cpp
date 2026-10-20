@@ -3,6 +3,7 @@
 #include "h47vr/first_person_camera.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
+#include "h47vr/look_driver.hpp"
 #include "h47vr/mod.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/symbols.hpp"
@@ -110,6 +111,7 @@ void NeutralizeFirstPersonSway(void* self) {
 
 void __fastcall HookMouseConCamUpdate(void* self, void*) {
     NeutralizeFirstPersonSway(self);
+    LookDriverApplyNativeYaw();
     if (g_real_update != nullptr) {
         g_real_update(self);
     }

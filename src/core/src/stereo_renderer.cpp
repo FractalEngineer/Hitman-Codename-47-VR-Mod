@@ -23,7 +23,6 @@ namespace {
 
 constexpr float kDefaultIpdMillimetres = 67.0f;
 constexpr float kDefaultGameUnitsPerMetre = 100.0f;
-constexpr float kDefaultVisibilityMarginDegrees = 0.0f;
 
 std::wstring g_control_path;
 std::atomic<bool> g_active{false};
@@ -38,8 +37,6 @@ float g_loaded_separation = kDefaultIpdMillimetres /
                             (1000.0f / kDefaultGameUnitsPerMetre);
 float g_loaded_ipd_mm = kDefaultIpdMillimetres;
 float g_loaded_units_per_metre = kDefaultGameUnitsPerMetre;
-float g_loaded_visibility_margin_degrees =
-    kDefaultVisibilityMarginDegrees;
 std::wstring g_state_path;
 bool g_gameplay_active = false;
 int g_last_mode = -1;
@@ -66,7 +63,6 @@ void WriteState() {
          << " gameplay=" << (g_gameplay_active ? 1 : 0)
          << " stereo=" << (g_active.load() ? 1 : 0)
          << " eye_separation=" << g_eye_separation.load()
-         << " fov_margin_deg=" << g_loaded_visibility_margin_degrees
          << " stereo_passes=" << g_stereo_passes.load()
          << " theater_passes=" << g_theater_passes.load() << "\n";
 }
@@ -125,18 +121,12 @@ void RefreshStereo() {
     const std::string line = ReadFirstLine(g_control_path);
     float ipdMm = kDefaultIpdMillimetres;
     float unitsPerMetre = kDefaultGameUnitsPerMetre;
-    float visibilityMarginDegrees = kDefaultVisibilityMarginDegrees;
     float legacySeparation = 0.0f;
     ReadNumber(line, "ipd_mm", &ipdMm);
     ReadNumber(line, "units_per_m", &unitsPerMetre);
-    ReadNumber(line, "fov_margin_deg", &visibilityMarginDegrees);
     const bool hasLegacySeparation = ReadNumber(line, "ipd", &legacySeparation);
     if (unitsPerMetre <= 1.0f || unitsPerMetre > 100000.0f) {
         unitsPerMetre = kDefaultGameUnitsPerMetre;
-    }
-    if (!(visibilityMarginDegrees >= 0.0f &&
-          visibilityMarginDegrees <= 30.0f)) {
-        visibilityMarginDegrees = kDefaultVisibilityMarginDegrees;
     }
     float separation = hasLegacySeparation
                            ? legacySeparation
@@ -148,17 +138,14 @@ void RefreshStereo() {
 
     const bool wasActive = g_active.exchange(true);
     if (!wasActive || separation != g_loaded_separation ||
-        ipdMm != g_loaded_ipd_mm || unitsPerMetre != g_loaded_units_per_metre ||
-        visibilityMarginDegrees != g_loaded_visibility_margin_degrees) {
+        ipdMm != g_loaded_ipd_mm || unitsPerMetre != g_loaded_units_per_metre) {
         g_loaded_separation = separation;
         g_loaded_ipd_mm = ipdMm;
         g_loaded_units_per_metre = unitsPerMetre;
-        g_loaded_visibility_margin_degrees = visibilityMarginDegrees;
         g_eye_separation = separation;
         H47VR_LOG_INFO("stereo: on, IPD %.1f mm = %.3f game units "
-                       "(%.1f game units/metre), visibility margin %.1f deg/side",
-                       ipdMm, separation, unitsPerMetre,
-                       visibilityMarginDegrees);
+                       "(%.1f game units/metre)",
+                       ipdMm, separation, unitsPerMetre);
     }
 }
 
@@ -212,13 +199,7 @@ void PublishRuntimeVisibilityUnion(const OpenXrEyePose& pose,
     // desktop aspect. Pick the horizontal value that covers both axes.
     const double requiredTangent =
         (std::max)(horizontal, vertical * aspect);
-    constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
-    constexpr double kMaxVisibilityFov = 155.0 * kDegreesToRadians;
-    const double horizontalFov = (std::min)(
-        kMaxVisibilityFov,
-        2.0 * std::atan(requiredTangent) +
-            2.0 * static_cast<double>(g_loaded_visibility_margin_degrees) *
-                kDegreesToRadians);
+    const double horizontalFov = 2.0 * std::atan(requiredTangent);
     CameraProbeSetRuntimeVisibilityFov(horizontalFov);
 }
 
@@ -228,8 +209,7 @@ bool StereoRendererStart() {
     g_control_path = JoinPath(mod::GameDirectory(), L"h47vr-stereo.txt");
     g_state_path = JoinPath(mod::GameDirectory(), L"h47vr-stereo-state.txt");
     H47VR_LOG_INFO("stereo renderer: ready - create %s with "
-                   "'ipd_mm=<millimetres> units_per_m=<scale> "
-                   "fov_margin_deg=<per-side headroom>'",
+                   "'ipd_mm=<millimetres> units_per_m=<scale>'",
                    Narrow(g_control_path).c_str());
     H47VR_LOG_INFO("stereo: gameplay state in %s",
                    Narrow(g_state_path).c_str());

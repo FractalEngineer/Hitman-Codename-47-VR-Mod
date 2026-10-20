@@ -150,8 +150,16 @@ a deliberate test.
   per-eye projection remains the runtime FOV.
 - A 6-degree-per-side visibility-margin experiment widened the engine culling
   camera further but produced no visible improvement in the physical headset.
-  Its default is back at zero, restoring the last good engine-FOV behavior.
-  The remaining edge band needs a different cause than a symmetric FOV shortfall.
+  The margin path has been removed, restoring the exact raw runtime eye-union
+  calculation from `b4c792c`. The remaining edge band needs a different cause
+  than a symmetric FOV shortfall.
+- The XR mirror reproduces the new culling clue: straight ahead is coherent, but
+  pitching the engine camera up 45 degrees loses the lower half of the submitted
+  image. The remaining defect is orientation-dependent visibility. The engine
+  visibility state and the final headset projection are not yet coincident under
+  the GL-seam pitch path. An opt-in native pitch feed produced coherent ceiling
+  and floor views without half-frame loss, but remains disabled pending sustained
+  movement, crouch and floor-sink validation.
 - The legacy renderer emits display-encoded color. XR presentation therefore
   prefers `GL_SRGB8_ALPHA8`; `GL_RGBA8` is a fallback for runtimes that do not
   offer it. Under VirtualDesktopXR the sRGB swapchain was accepted at
@@ -167,9 +175,11 @@ a deliberate test.
 The wide-visibility path has been verified on the desktop and under SteamVR's
 null HMD. A physical Quest pass found the corrected path practically usable but
 with a residual edge band. Extra symmetric FOV did not change that band. sRGB
-brightness parity has been confirmed. A faithful desktop mirror of the submitted
-XR eye image is the next debugging requirement; it should use the same projection,
-visibility, and color path rather than the current generic 800x600 window output.
+brightness parity has been confirmed. A faithful left/right/side-by-side mirror
+of the submitted XR eye image now exists and has been used to reproduce
+pitch-dependent culling. It blits the completed OpenXR swapchain image rather
+than re-rendering the world, so projection, visibility and color remain the same
+as headset submission.
 
 ## Presentation path
 
@@ -191,6 +201,19 @@ layer. Gameplay begins the XR frame before the first perspective draw, acquires
 both eye images, and renders the existing face-list replay into their FBOs. If
 native acquisition or binding is unavailable, the renderer reverts to copying
 the desktop side-by-side halves for that frame.
+
+`h47vr-mirror.txt` adds a debug presentation path after the layer has been
+completed. Left and right layouts fit one swapchain image into the 800x600
+window; `sbs` places both eye images side by side. The mirror preserves the
+OpenXR sRGB swapchain format and can dump the resulting framebuffer through
+`tools/mirror.ps1 -Capture`.
+
+Head yaw no longer uses synthesized mouse messages. `openxr_pose.cpp` publishes
+the predicted head pose, and `look_driver.cpp` adds the closed-loop yaw delta to
+`g_pSysInterface + 0xA95` immediately before MouseConCam's native update.
+Controller smooth/snap turning uses the same accumulator. Controller movement
+and menu navigation write the engine's per-key state; ESC is posted as a held
+window key pair because a zero-duration pair is ignored.
 
 ## Engine constraints to respect
 

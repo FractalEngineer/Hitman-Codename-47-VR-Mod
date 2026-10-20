@@ -126,10 +126,10 @@ The physical pass also produced these changes:
 
 - MouseConCam's four sway/bob oscillators are zeroed while first-person mode is
   active, removing most random camera shake.
-- MouseConCam yaw is still fed by synthesized `WM_MOUSEMOVE`. The correction cap
-  is 96 pixels per frame with a 0.15-degree deadband, and the user reported the
-  fast-motion lag fixed. This is explicitly a temporary mechanism: the user
-  dislikes it, and cursor-coordinate assumptions keep making vertical aim fragile.
+- At the time of that pass, MouseConCam yaw was still fed by synthesized
+  `WM_MOUSEMOVE`. The correction cap was 96 pixels per frame with a 0.15-degree
+  deadband, and the user reported the fast-motion lag fixed. It was explicitly a
+  temporary mechanism; the native accumulator path has since replaced it.
 - Headset pitch no longer goes through MouseConCam. Feeding pitch through mouse
   deltas moved the close follow-camera pivot downward and caused a slow sink
   through the floor. Pitch is applied to the stereo vertices at the GL seam.
@@ -141,6 +141,50 @@ The physical pass also produced these changes:
 - Theater mode is now a head-relative quad 1.8 m forward at the current head
   position and orientation, instead of a hard-coded 1.5 m world height. The user
   confirmed the theater height and rendering fix.
+
+**Native head yaw and XR mirror, 2026-10-20.** The temporary mouse-message route
+has been replaced for headset yaw. `MouseConCam` rotates its camera offset vector
+at `+0x2D/+0x31/+0x35` from the native look accumulator at
+`g_pSysInterface + 0xA95` inside `FUN_0fce6f20`. The render thread now writes
+OpenXR yaw into that accumulator immediately before invoking the real
+MouseConCam update. A synthetic 30-degree head pose moved the engine readback
+from 0 to 30.0373 degrees with zero posted mouse messages. Controller input now
+also uses this native yaw path through the same accumulator. Manual
+`h47vr-look.txt` turns remain available as a migration fallback.
+
+`h47vr-mirror.txt` now selects `left`, `right`, or `sbs`. Direct stereo blits the
+completed OpenXR swapchain images back to the game's default framebuffer before
+`SwapBuffers`; it does not re-render the world. The mirror therefore carries the
+same runtime projection, visibility result and `GL_SRGB8_ALPHA8` swapchain as
+the headset. Under the null HMD the 800x600 desktop mirror read back a non-black
+mean luminance of 0.1647, and `tools/mirror.ps1 -Capture` writes the next frame
+to `h47vr-mirror-capture.bmp`. Straight ahead the image was coherent. Pitching
+the engine camera up 45 degrees lost the entire lower half of the image, which
+confirms that the remaining culling defect is orientation-dependent rather than
+a symmetric horizontal-FOV shortfall.
+
+OpenXR action sets now provide left-stick movement, right-stick smooth turn,
+right-stick-click snap turn and an A/B ESC binding. Movement directions are
+written into the engine's native per-key state (`interface+0xAB6/+0xAB7`,
+15-byte records indexed by virtual key); in menus the same sticks map to arrow
+keys. The ESC action posts a 120 ms held `WM_KEYDOWN`/`WM_KEYUP` pair to the game
+window because an instantaneous pair is ignored. Headless verification observed
+the key-down/key-up posts and the engine changing from `mode=stereo` to
+`mode=theater`. Live controller travel and full menu navigation remain to be
+checked.
+
+**Pitch-dependent culling is the current blocker, 2026-10-20.** Straight-ahead
+XR rendering matches the last good engine-FOV behavior and retains sRGB. Looking
+up or down with the mouse, however, produces a large black half-frame in the
+mirrored submitted image. The engine's pitch-visible state and the final
+headset/vertex projection are therefore not staying coincident. A diagnostic
+`h47vr-nativepitch.txt` path feeds pitch through the same native accumulator.
+Synthetic plus/minus 45-degree captures through that path were coherent in both
+directions, including the ceiling and floor, with no half-frame loss. The
+native offset stayed stable at 2.121 units above/below the follow target over a
+10-second static hold. It remains opt-in because the earlier mouse pitch caused
+floor sinking during first-person movement; sustained movement, crouch and
+collision behavior still need validation.
 
 **Peripheral culling is improved but still open, 2026-10-20.** The real path is
 the engine camera's own projection/clipping state, not the downstream polygon
@@ -173,9 +217,9 @@ A later experiment added `fov_margin_deg=6` per side in angular space before
 publishing the engine visibility FOV, leaving the actual per-eye OpenXR
 projection untouched. On the Quest run whose physiological union was 132.79
 degrees, the engine accepted 144.79 degrees, but the user reported no visible
-improvement. The margin default is therefore back at zero. Do not assume the
-remaining edge band is a symmetric-FOV shortfall; it needs an honest XR-image
-mirror on the desktop and then a fresh investigation of per-geometry visibility.
+improvement. The margin control has therefore been removed. Do not assume the
+remaining edge band is a symmetric-FOV shortfall; the XR-image mirror now
+reproduces it as pitch-dependent visibility.
 
 The XR presentation swapchain now prefers `GL_SRGB8_ALPHA8` (`0x8C43`) and
 falls back to `GL_RGBA8`. The old renderer emits display-encoded values, so an
@@ -426,6 +470,9 @@ The fullscreen path at the same handler reads its own remembered cursor position
 ./tools/openxr.ps1 -Enable              # initialize OpenXR pose + presentation
 ./tools/openxr.ps1 -Enable -RuntimeJson 'C:\Program Files (x86)\Steam\steamapps\common\SteamVR\steamxr_win32.json'
 ./tools/openxr.ps1 -Off                 # leave headset initialization off
+./tools/mirror.ps1 -Layout Sbs -Capture # mirror submitted XR image and dump BMP
+./tools/headpose.ps1 -Yaw 30            # synthetic native head-yaw test
+./tools/controller-test.ps1 -Escape     # synthetic controller ESC test
 
 # calibration experiments (see Dead ends before using them in anger)
 python tools/calibrate-look.py before.png after.png --px 100 --region 260,150,640,330
@@ -452,9 +499,13 @@ Control files next to the game (all optional, delete to disable):
 | --- | --- |
 | `h47vr-look.txt` | `dx=<px> dy=<px> [steps=<n>] [rate=<frames>]` - turn the engine's **own** camera by posting `WM_MOUSEMOVE`; no focus needed. Consumed on sight, so one write is one turn (`tools/look.ps1`) |
 | `h47vr-camread.txt` | live MouseConCam pose: `yaw`, engine `pitch` (elevation, positive up), the player-relative offset, camera pointer, epoch and update count |
-| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale> [fov_margin_deg=<degrees>]` sets eye separation and optional engine-culling headroom (margin defaults to 0; `tools/stereo.ps1`) |
+| `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale>` sets eye separation (`tools/stereo.ps1`) |
 | `h47vr-openxr.txt` | while present, initialize OpenXR on the game's WGL context and use predicted eye X positions when available (`tools/openxr.ps1`) |
 | `h47vr-openxr-runtime.txt` | optional process-local `XR_RUNTIME_JSON` path for testing another runtime without changing the machine registry |
+| `h47vr-mirror.txt` | `layout=left\|right\|sbs` - blit the completed OpenXR eye image into the game window (`tools/mirror.ps1`) |
+| `h47vr-headpose.txt` | `yaw=<deg> pitch=<deg>` - synthetic head pose for headless native-orientation tests (`tools/headpose.ps1`) |
+| `h47vr-controller-test.txt` | `lx=<x> ly=<y> rx=<x> ry=<y> esc=0\|1 snap=0\|1` - replaces live controller input for headless tests (`tools/controller-test.ps1`) |
+| `h47vr-nativepitch.txt` | opt-in: feed head pitch through the native MouseConCam accumulator; coherent in synthetic +/-45-degree tests but still needs movement/floor-sink validation (`tools/nativepitch.ps1`) |
 | `h47vr-widefov.txt` | `fov_deg=<degrees> [clip=0]` - diagnostic wide desktop projection; `clip=0` isolates the projection from the unproven polygon-clipper experiment (`tools/widefov.ps1 -NoClipBypass`) |
 | `h47vr-firstperson.txt` | `distance=<game units>` - replace MouseConCam's 150/100-unit follow targets so the engine places the gameplay camera in the head (`tools/firstperson.ps1`) |
 | `h47vr-stereo-state.txt` | published state: `mode=off\|theater\|stereo`, `gameplay=0\|1`, eye separation, culling margin and both pass counters |
@@ -801,14 +852,12 @@ mechanism, not as a camera finder.
 - **`objectDrawA`** (RenderOpenGL RVA `0x6590`) stays `0` while a level renders
   at 62 FPS. It is **not** a world-geometry signal; that part of the renderer map
   needs redoing.
-- **Synthesised keyboard input - reopened, and now viable.** This was written off
-  because the keys never landed, but the real cause was focus: `SetForegroundWindow`
-  was being refused, so the events went to whatever window did have focus. With
-  `Focus-GameWindow`'s AttachThreadInput route the game genuinely takes the
-  foreground, and **mouse deltas now demonstrably drive the engine's camera**
-  (`tools/turn.ps1`, verified by capture). Keyboard through the same path has not
-  been re-tested yet, so do not assume ESC now works - but "input injection does
-  not work here" is no longer true, and the mouse half is proven.
+- **Synthetic keyboard input is viable, but focus is not required for the mod.**
+  `SendInput` still needs the foreground, but the controller ESC path now posts a
+  120 ms held `WM_KEYDOWN`/`WM_KEYUP` pair directly to the game window. This was
+  verified by the renderer changing from gameplay stereo to menu theater state.
+  Movement/menu directions are written into the engine's per-key state instead
+  of relying on focus.
 - **Moving the camera through the GL matrix pipeline.** There is no camera
   matrix there to move: `glLoadMatrixf` in modelview is identity once per frame,
   and `glPushMatrix`, `glPopMatrix`, `glMultMatrixf`, `glRotatef` and `glScalef`
@@ -825,10 +874,10 @@ mechanism, not as a camera finder.
   800x600 frame, with the game behind other applications and without stealing
   focus. A plain `CopyFromScreen` of the desktop works too. Use
   `tools/capture.ps1`, which does both and has a `-Compare` mode that reports a
-  mean absolute per-channel difference between two shots, so "did that change the
-  picture" is answerable from here. What genuinely does not work is *input*:
-  synthetic keys need the window to be foreground and `SetForegroundWindow` is
-  refused, so the user still presses ESC for the intro.
+  mean absolute per-channel difference between two shots. When a windowed
+  desktop is unavailable, the XR mirror's BMP capture reads the same submitted
+  image from GL. `SendInput` still requires foreground, but direct window
+  messages and native input-state writes now cover the controller path.
 - **`llLevels`** is the archive name inside `AllLevels/...` paths, not a
   level-selection property.
 
@@ -843,6 +892,10 @@ mechanism, not as a camera finder.
 ./tools/enter-level.ps1          # deploy + launch (+ optional scene request)
 ./tools/drive.ps1                # write h47vr-go.txt now, no relaunch
 ./tools/send-keys.ps1            # vk:/text: sequences, scan codes
+./tools/mirror.ps1               # left/right/SBS XR mirror and BMP capture
+./tools/headpose.ps1             # synthetic head pose for native yaw tests
+./tools/controller-test.ps1      # synthetic controller sample for headless input
+./tools/nativepitch.ps1          # diagnostic native-pitch gate (off by default)
 ./tools/widefov.ps1              # desktop A/B for the headset culling path
 ./tools/steamvr-headless.ps1     # -Action Enable|Disable|Status (null HMD)
 ./tools/ghidra-analyze.ps1       # headless analysis + anchor extraction
@@ -856,7 +909,8 @@ address), `DecompileAt.java` (materialises a function Ghidra never defined, then
 decompiles it - this is what cracked the level start), `DumpImportCalls.java`
 (call sites of any import by name, which is how the mouse path above was found),
 `FindScalarRefs.java` (every instruction mentioning a displacement value, which
-is how the readers of `interface+0xa95` were found).
+is how the readers of `interface+0xa95` were found), and `DumpVtable.java`
+(function-pointer tables, used to recover the camera class layout).
 Run:
 
 ```
@@ -894,36 +948,27 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 ## Immediate next steps
 
 Milestone 2 continues here. Native OpenXR eye rendering, physical 67 mm IPD,
-theater placement and sRGB color are working. Head tracking is functional but
-the mouse-message implementation must be replaced. Peripheral culling is
-improved but still leaves an edge band. Headset testing is paused.
+theater placement, sRGB color, native head yaw, XR mirroring and the minimal
+controller bridge are working. Headset testing is paused. The remaining culling
+failure is pitch-dependent and is reproducible from the mirrored image.
 
-1. **Restore the last good culling state.** The user marked the build immediately
-   before the sRGB/margin experiment as "way less culling" and "practically
-   usable." Keep the sRGB color fix, but preserve the raw runtime eye-union FOV
-   behavior from `b4c792c`; the 6-degree margin default is already back at zero.
-   Do not call culling fixed until the user confirms parity with that run.
-2. **Replace mouse-message head yaw with a native engine orientation path.** The
-   user explicitly dislikes synthesized `WM_MOUSEMOVE`. It has repeatedly driven
-   MouseConCam elevation to 89 degrees and depends on cursor/client/render
-   coordinates. Start from `_ZCAMERA_MainCameraControl`, `MouseConCam` update RVA
-   `0x26F20`, and the camera-selection list; identify the gameplay yaw field or
-   native callback that actually rotates the engine camera and feed OpenXR yaw
-   there. Keep translation, collision and visibility inside the engine.
-3. **Make the desktop window mirror the submitted XR eye image.** The 800x600
-   game window is not a faithful headset view. Add a debug presentation mode
-   that copies the completed left/right OpenXR swapchain images to the game
-   window as selectable left-eye or side-by-side, preserving the exact runtime
-   projection, culling state and sRGB format. This is the gate for further
-   headless culling work; the user does not want repeated headset sessions for
-   every probe.
-4. **Add minimal OpenXR controller input.** Before fuller Milestone 3 work,
-   implement left-stick smooth locomotion, right-stick smooth/snap turn, a
-   controller button mapped to ESC for cinematics, and stick-to-arrow mapping in
-   menus. The goal is to enter a level and traverse the front end without removing
-   the headset, while retaining keyboard/mouse fallback.
-5. **Then resume first-person polish.** Hide the player's head while retaining
-   the body for shadows/reflections, calibrate eye height and near clipping, and
+1. **Fix pitch-dependent engine visibility.** The mirror reproduces the user's
+   culling report: a 45-degree upward engine pitch loses the lower half of the
+   submitted image. Investigate the pitch/orientation basis used by MouseConCam
+   and the engine visibility rebuild. Do not solve this by further horizontal
+   FOV widening or by reverting to the ruled-out clipper bypass.
+2. **Validate native yaw in a physical headset.** Native accumulator injection
+   is verified headlessly with zero mouse-message posts. Confirm comfort,
+   latency and pitch/roll interaction in the next deliberately scheduled headset
+   pass, not a separate pass for every probe.
+3. **Use the XR mirror as the culling debugger.** Left/right/side-by-side output
+   and BMP capture now preserve the submitted runtime image. Use those for
+   before/after work instead of the old generic desktop view.
+4. **Finish controller validation.** Smooth/snap turning and ESC are implemented
+   through native engine state. Verify live controller travel, snap direction,
+   cinematic skipping, and stick-to-arrow traversal of the front end.
+5. **Resume first-person polish.** Hide the player's head while retaining the
+   body for shadows/reflections, calibrate eye height and near clipping, and
    validate pitch/roll through crouching, leaning and scripted camera changes.
 6. **Calibrate game units.** The working scale is 100 units/metre with the user's
    67 mm IPD. Validate it against physical level landmarks before tuning movement

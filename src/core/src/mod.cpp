@@ -3,6 +3,7 @@
 #include "h47vr/console_driver.hpp"
 #include "h47vr/camera_probe.hpp"
 #include "h47vr/camera_readback.hpp"
+#include "h47vr/controller_input.hpp"
 #include "h47vr/first_person_camera.hpp"
 #include "h47vr/fingerprint.hpp"
 #include "h47vr/gl_probe.hpp"
@@ -191,6 +192,7 @@ void ApplyReinstall();
 
 BOOL WINAPI HookSwapBuffers(HDC device) {
     const unsigned long frame = ++g_presented_frames;
+    ControllerInputFrame(frame);
     // Frame boundary: safe to patch code, and the only place a module reload
     // can be turned back into live hooks.
     ApplyReinstall();
@@ -294,6 +296,7 @@ void ApplyReinstall() {
         InstallGameplayHooks();
         CameraProbeInstall();
         CameraReadbackRearm();
+        ControllerInputRearm();
         FirstPersonCameraRearm();
     }
     if (renderer != nullptr) {
@@ -399,6 +402,7 @@ bool Initialize(const char* trigger) {
     GlProbeInstall(glFilter.c_str());
     SceneProbeInstall();
     ConsoleDriverInstall();
+    ControllerInputStart();
     LookDriverStart();
     FirstPersonCameraStart();
     StereoRendererStart();

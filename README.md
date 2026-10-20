@@ -22,12 +22,19 @@ placement. The runtime eye union is passed into the engine's own
 projection/visibility builder before gameplay, keeping the face list, clipping
 and final stereo projection coherent. That path was the user's "practically
 usable" milestone, but it still leaves an edge-culling band; an additional
-6-degree symmetric FOV margin produced no visible improvement and is disabled.
+6-degree symmetric FOV margin produced no visible improvement and has been removed.
 The successful physical-headset color fix uses an sRGB OpenXR swapchain so the
 legacy display-encoded game image no longer appears brighter than flat mode.
-The current priorities are a native head-orientation path instead of synthesized
-`WM_MOUSEMOVE`, a desktop mirror of the actual XR eye image for headless
-debugging, and minimal controller locomotion/menu input.
+Headset yaw now feeds MouseConCam's native look accumulator rather than
+synthesizing `WM_MOUSEMOVE`; the old mouse path remains a diagnostic fallback.
+The desktop can mirror the completed left, right, or side-by-side XR eye image,
+and a synthetic head-pose path keeps culling work headless. Minimal controller
+actions cover movement, smooth/snap turning and ESC, with stick-to-arrow menu
+mapping. Pitch-dependent culling is the current blocker: straight-ahead rendering
+is coherent, but a 45-degree upward engine pitch still loses the lower half of
+the submitted image on the legacy GL-seam pitch path. The opt-in native pitch
+feed produced coherent upward and downward mirrored views, with movement and
+floor-sink behavior still awaiting validation.
 Menus and cinematics use theater mode, with immersive stereo reserved for gameplay. Gameplay can now move
 from the 150-unit follow camera into a first-person position through the
 engine's own MouseConCam transform; head hiding and final eye-height calibration

@@ -38,6 +38,11 @@ void LookDriverFrame(unsigned long frame);
 void LookDriverSetHeadPose(bool valid, double yawDegrees, double pitchDegrees);
 double LookDriverScenePitchDegrees();
 
+// Called immediately before the engine's MouseConCam update. It adds OpenXR
+// head yaw and controller turn to the native look accumulator consumed by
+// MouseConCam, avoiding WM_MOUSEMOVE and cursor-space assumptions.
+void LookDriverApplyNativeYaw();
+
 // Installs the cursor guard if the renderer is loaded. Safe to call repeatedly,
 // and needs calling again after a module reload drops the patch.
 void LookDriverRearm();

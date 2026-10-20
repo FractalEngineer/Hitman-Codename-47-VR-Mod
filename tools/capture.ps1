@@ -60,6 +60,26 @@ public class H47Capture {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr value);
+    public delegate bool EnumWindowsProc(IntPtr h, IntPtr value);
+
+    public static IntPtr FindLargestWindow(uint processId) {
+        IntPtr best = IntPtr.Zero;
+        long bestArea = 0;
+        EnumWindows(delegate(IntPtr h, IntPtr value) {
+            uint owner;
+            GetWindowThreadProcessId(h, out owner);
+            if (owner != processId || !IsWindowVisible(h)) { return true; }
+            RECT r;
+            if (!GetClientRect(h, out r)) { return true; }
+            long area = (long)(r.Right - r.Left) * (r.Bottom - r.Top);
+            if (area > bestArea) { bestArea = area; best = h; }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
 }
 "@
 
@@ -91,10 +111,14 @@ if ($Compare) {
 }
 
 $process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    Select-Object -First 1
 if (-not $process) { throw "no $ProcessName window found" }
 
 $handle = $process.MainWindowHandle
+if ($handle -eq 0) {
+    $handle = [H47Capture]::FindLargestWindow([uint32]$process.Id)
+}
+if ($handle -eq 0) { throw "no capturable window found for $ProcessName" }
 if ($Screen -and -not $NoFocus) {
     if ([H47Capture]::IsIconic($handle)) { [void][H47Capture]::ShowWindow($handle, 9) }
     [void][H47Capture]::SetForegroundWindow($handle)

@@ -11,10 +11,10 @@ as the work**.
 
 Repo: `C:\Users\titan\Desktop\Github_Projects\Mine\Htman-Codename-47-VR-Mod`
 (remote `FractalEngineer/Htman-Codename-47-VR-Mod`, branch `main`).
-Repo state: local `main` contains `8125855` plus the asymmetric-projection,
-head-tracking, first-person, theater-selection, OpenXR-presentation and native
-per-eye rendering follow-ups described below. `origin/main` has not been updated
-with these local commits.
+Repo state: verify with `git status --short --branch`; this handoff predates its
+own commit. At the start of this session `origin/main` matched local `main` at
+`5baaa1d`, and this pass adds one local commit with the visibility fix. Do not
+assume the working tree is still clean or that the new commit was pushed.
 The game may or may not be running; it keeps rendering while the desktop is used,
 so a session is free to launch it and walk away.
 
@@ -139,11 +139,44 @@ The physical pass also produced these verified fixes:
   position and orientation, instead of a hard-coded 1.5 m world height. The user
   confirmed the theater height and rendering fix.
 
-**Open blocker: peripheral geometry is still culled, 2026-10-20.** The headset
-does not show the full OpenXR FOV. The user sees the floor and lower walls with
-black wedges around them. The eye pass uses the correct runtime asymmetric FOV,
-but the engine has already built a much narrower face list using MouseConCam's
-original visibility volume.
+**Peripheral culling fix implemented and desktop-verified, 2026-10-20.** The
+narrow face list was traced one level deeper than the previous handoff. Every
+world group reaches `Clip` (`HitmanDlc.dlc` RVA `0x93C50`) through `CamUpdate`;
+`Clip` calls the polygon clipper at RVA `0x93670`. That clipper removes geometry
+against the game's narrow horizontal FOV before `RenderOpenGL.dll` RVA `0x3680`
+ever receives the face list.
+
+The clipper already has a valid "nothing needed clipping" return value of zero.
+During gameplay the mod now returns that value directly, leaving the complete
+face list intact so OpenGL clips it with the real wide per-eye frustum. The
+bypass is active only while MouseConCam reports fresh gameplay and either valid
+OpenXR FOVs are present or the explicit desktop test gate is on. Menus,
+cinematics and ordinary desktop play retain native clipping.
+
+Two supporting paths are now instrumented:
+
+- The renderer's view object is sampled at `RenderOpenGL.dll` RVA `0x28A40`.
+  Its `+0x16E` field is the **horizontal** FOV in radians. Native training far
+  view reads 45 degrees, which produces the familiar 34.52-degree vertical
+  `glFrustum`.
+- `tools/widefov.ps1` writes `h47vr-widefov.txt` with `fov_deg=<n>`. In gameplay
+  it both enables the clip bypass and gives the desktop SBS path a synthetic
+  asymmetric per-eye FOV, letting the headset culling combination be tested
+  without a headset.
+
+Live desktop verification: at 122 degrees horizontal, the engine emitted a
+122-degree horizontal / 107.07-degree vertical frustum when the view path was
+active, polygon clipping logged `bypassed for immersive view`, and the SBS image
+changed by 21.17 mean absolute channel value against native clipping. The
+widened frame exposed substantially more wall and floor geometry. Removing the
+gate logged `polygon clipping restored` and returned the frame to the native
+capture within 0.46. The game stayed responsive at the displayed 60 FPS and did
+not crash.
+
+Physical-headset confirmation remains. The user stopped headset testing before
+this build existed, so the expected disappearance of the black peripheral wedges
+has not yet been observed in the Quest. Confirm this first when a headset is
+available; tests should run in real gameplay, not at the menu or opening scene.
 
 Experiments already tried and ruled out:
 
@@ -160,13 +193,13 @@ Experiments already tried and ruled out:
 - `_ZLIST_CheckVisible` and `_ZGEOM_AdoptVisibility` are descriptor initializers,
   not boolean cull predicates. Their helper functions at `0xFE0DE60`,
   `0xFE19080`, `0xFE0E5D0`, and `0xFE0E1A0` are generic event/message handlers.
-  The actual face-list visibility path still needs to be located.
+  The actual geometry rejection is the polygon clipper at `0x93670` documented
+  above.
 
-Do not repeat the projection overscan or property-registry calls. Start from the
-face-list construction side. Useful anchors are `FUN_0fd56120` (`CamUpdate`),
-which walks geometry and calls `FUN_0fd53c50` (`Clip`), and
-`FUN_0fe777f0`/`FUN_0fe7b730`, which test bounds/boxes. A debugger session or a
-small non-invasive probe at `CamUpdate` is the likely next route.
+Do not repeat the projection overscan or property-registry calls. The useful
+chain is now `FUN_0fd56120` (`CamUpdate`) -> `FUN_0fd53c50` (`Clip`) ->
+`FUN_0fd53670` (polygon clipper). The old `FUN_0fe777f0` address was a no-op;
+`FUN_0fe7b730` is a bounds helper, not the visibility decision.
 
 The game's own level start is
 
@@ -403,6 +436,7 @@ Control files next to the game (all optional, delete to disable):
 | `h47vr-stereo.txt` | while present, render perspective face-list passes side by side; `ipd_mm=<millimetres> units_per_m=<scale>` sets physical eye separation (`tools/stereo.ps1`) |
 | `h47vr-openxr.txt` | while present, initialize OpenXR on the game's WGL context and use predicted eye X positions when available (`tools/openxr.ps1`) |
 | `h47vr-openxr-runtime.txt` | optional process-local `XR_RUNTIME_JSON` path for testing another runtime without changing the machine registry |
+| `h47vr-widefov.txt` | `fov_deg=<degrees>` - diagnostic only: bypass the narrow polygon clipper during gameplay and give desktop SBS the equivalent wide per-eye projection (`tools/widefov.ps1`) |
 | `h47vr-firstperson.txt` | `distance=<game units>` - replace MouseConCam's 150/100-unit follow targets so the engine places the gameplay camera in the head (`tools/firstperson.ps1`) |
 | `h47vr-stereo-state.txt` | published state: `mode=off\|theater\|stereo`, `gameplay=0\|1`, eye separation and both pass counters |
 | `h47vr-cam.txt` | `yaw=<degrees> pitch=<degrees>` - the injected camera rotation |
@@ -556,6 +590,7 @@ Modules relocate, so **always use RVAs**. Preferred bases in brackets.
 | MouseConCam follow-distance immediates (150 / 100) | `0x2714F` / `0x27158` |
 | `_ZCAMERA_BaseCamera` / `_MainCameraControl` / `_NewFollowCam2` / `_ScopeCamera` | `0x020E80` / `0x023940` / `0x029700` / `0x02D060` |
 | `_ZLIST_SortCameraControls` | `0x023430` |
+| World `CamUpdate` / `Clip` / polygon clipper | `0x96120` / `0x93C50` / `0x93670` |
 | `_ZGEOM_AdoptVisibility` / `_ZLIST_CheckVisible` | `0x159050` / `0x14DE30` |
 | `_ZITEM_FireShot` | `0x0EBA30` |
 | `_ZGEOM_BasePickupTarget` / `_ZGEOM_ItemActivate` | `0x00D980` / `0x020240` |
@@ -570,7 +605,8 @@ console/config dispatcher `0xE590`, its line-splitting caller `0x104AD`.
 (`EngineData.cpp`; switches on `Cams`, `Hira`, `Dir`, `HiraClip`, `DirClip`);
 the world vtable is at RVA `0x30298`.
 
-`RenderOpenGL.dll` (loads at `0x0FB70000`): presentation `0x0048F0` (~1/frame,
+`RenderOpenGL.dll` (loads at `0x0FB70000`): renderer view setup `0x028A40`
+(reads the view object's horizontal FOV at `+0x16E`), presentation `0x0048F0` (~1/frame,
 calls `glFinish` and `SwapBuffers`), face-list draw consumer `0x003680`
 (`__thiscall(self, list)`, ~21 calls/frame), `glDrawElements` candidates
 `0x006590` and `0x006270`, 2D UI passes `0x004930`, `0x005300`, `0x005A10`,
@@ -779,6 +815,7 @@ mechanism, not as a camera finder.
 ./tools/enter-level.ps1          # deploy + launch (+ optional scene request)
 ./tools/drive.ps1                # write h47vr-go.txt now, no relaunch
 ./tools/send-keys.ps1            # vk:/text: sequences, scan codes
+./tools/widefov.ps1              # desktop A/B for the headset culling path
 ./tools/steamvr-headless.ps1     # -Action Enable|Disable|Status (null HMD)
 ./tools/ghidra-analyze.ps1       # headless analysis + anchor extraction
 python tools/peutils.py <dll>    # exports with RVAs
@@ -829,16 +866,19 @@ Vendored: `third_party/openxr` (loader 1.1.65, x86), `third_party/minhook`
 ## Immediate next steps
 
 Milestone 2 continues here. Native OpenXR eye rendering, physical 67 mm IPD,
-head tracking and theater placement are working. The blocking issue is the
-engine's narrow visibility/face-list pass.
+head tracking and theater placement are working. The narrow visibility path is
+identified and has a desktop-verified bypass; physical confirmation is the next
+gate.
 
-1. **Fix peripheral culling.** Locate the code that decides which geometry
-   enters the `0x3680` draw lists during `FUN_0fd56120`/`FUN_0fd53c50`. Do not
-   retry `glFrustum` overscan or property-registry calls. The likely route is a
-   debugger breakpoint or non-invasive probe in `CamUpdate`, inspecting the active
-   camera's visibility bounds/FOV and the geometry-list iterator. The required
-   outcome is geometry coverage for the union of both runtime eye frusta, not a
-   wider final GL projection.
+1. **Confirm the culling fix in a real headset.** Enter controllable gameplay,
+   not the menu or opening scene, and look around the training cell. The widened
+   path bypasses `HitmanDlc.dlc+0x93670` while MouseConCam is fresh and valid
+   OpenXR views exist. Expected result: wall/floor geometry reaches the outer
+   parts of both eye images instead of ending at a central 34.52-degree wedge.
+   Check 60 FPS, both eyes and the transition out of theater mode. If wedges
+   remain, capture whether they are outside the level's real geometry before
+   changing the bypass. `tools/widefov.ps1 -Degrees 122` reproduces the same
+   clip-plus-wide-projection combination on the desktop.
 2. **Confirm head roll direction.** The final build flips the roll sign so the
    scene rotates opposite the headset roll. This has not been tested since the
    last sign change. Confirm left and right tilt, then adjust only the sign in

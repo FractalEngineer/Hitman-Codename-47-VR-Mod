@@ -2,22 +2,15 @@
 
 namespace h47vr {
 
-// Watches the engine's world-to-eye transform, `HitmanDlc.dlc` RVA 0x93C50
-// (`FUN_0fd53c50`).
+// Installs the camera/world-path probes and the immersive visibility override.
+// The engine clips face groups inside `HitmanDlc.dlc` RVA 0x93670 during the
+// `Clip` call from `CamUpdate`. During gameplay the visibility controller can
+// use that function's "nothing needed clipping" result so the full face list
+// reaches OpenGL and the real per-eye frustum performs the clip.
 //
-// That function turns a world vertex into eye space as
-//
-//     eye = R * (world - camPos)
-//
-// where `R` is a 3x3 reached through the camera object's second field and
-// `camPos` is the three floats after it. The camera itself is the last stack
-// argument, and the function runs many times per frame, which makes it a cheap
-// and reliable place to pick the live camera pointer up.
-//
-// The camera object is what has to be driven. Rotating vertices at the GL
-// boundary cannot work on its own: the engine has already culled against the
-// frustum of the camera it believes it has, so geometry outside that frustum was
-// thrown away before we ever saw it.
+// The same module also samples the renderer's view object and can widen its
+// horizontal FOV. It is gated: ordinary desktop play keeps the native camera
+// and clipping path unchanged.
 bool CameraProbeInstall();
 
 // Re-installs after HitmanDlc.dlc is reloaded.
@@ -39,5 +32,9 @@ void CameraProbeReport(unsigned long frame);
 // runs from the proxy's glFrustum detour, inside the frame that is being built.
 void CameraProbeFrame(unsigned long frame);
 void CameraProbeOnFrustum();
+
+// Diagnostic horizontal FOV from <game>\h47vr-widefov.txt, or zero when the
+// desktop test gate is absent. The value is in radians.
+double CameraProbeWideFovRadians();
 
 }  // namespace h47vr

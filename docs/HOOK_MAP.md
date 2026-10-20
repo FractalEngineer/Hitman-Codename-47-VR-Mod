@@ -177,6 +177,7 @@ time by counting calls with convention-agnostic detours.
 | --- | --- | --- | --- |
 | `FUN_0fb748f0` | `0x0048F0` | presentation only: calls `glFinish` and `SwapBuffers` | ~1 per frame (118 in 120) |
 | `FUN_0fb73680` | `0x003680` | face-list draw consumer, not the gameplay update | ~21 per frame; **hooked and replayed per perspective eye** |
+| `FUN_0fb98a40` | `0x028A40` | renderer view setup; first stack argument owns projection constants | horizontal FOV at `+0x16E`, viewport `+0x156/+0x15E` |
 | `FUN_0fb76590` | `0x006590` | per-object draw: `glPushMatrix`, `glMultMatrixf`, `glTranslatef`, `glScalef`, `glBindTexture`, `glVertexPointer`, `glDrawElements` | 0 at the front end - world geometry is dormant |
 | `FUN_0fb76270` | `0x006270` | second object path: matrix stack, `glCullFace` | 0 at the front end |
 | `FUN_0fb74930` | `0x004930` | 2D pass: `glOrtho` + `glViewport` + `glBegin`/`glEnd` | menu/UI layer |
@@ -200,6 +201,11 @@ Two consequences for Milestone 2, both from measurement rather than inference:
 - The fixed-function projection is intercepted in the proxy's GL seam. Runtime
   views now replace that scale with a per-eye `glFrustum` built from OpenXR's
   four FOV tangents and the engine's current near/far planes.
+- The gameplay face list is CPU-clipped by `HitmanDlc.dlc+0x93670` inside
+  `Clip` (`0x93C50`). Returning zero takes that function's existing no-op path;
+  the mod uses it during immersive gameplay so the real per-eye OpenGL frustum
+  performs clipping. Returning the value is sufficient; the face-list data does
+  not need to be rebuilt.
 
 `RenderOpenGL.dll` loaded at its preferred base `0x0FB70000` in that run, while
 `HitmanDlc.dlc` relocated. Both cases occur, which is why every address in this

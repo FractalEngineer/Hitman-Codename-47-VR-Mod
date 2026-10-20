@@ -142,18 +142,21 @@ a deliberate test.
   needs a connected headset to validate eye positions, asymmetric tangents and
   head tracking.
 - Physical Quest validation confirmed the 67 mm head-local IPD, head tracking
-  and theater placement. Peripheral geometry remains missing because the engine
-  builds a narrow face list before the XR renderer runs; projection overscan,
-  console `CameraFOV`, and a live change to the serialized 67.4 FOV value did not
-  fix it. The face-list visibility path is the next target.
+  and theater placement. Peripheral geometry was removed by the polygon clipper
+  at `HitmanDlc.dlc+0x93670`, called from `Clip` before the XR renderer receives
+  the face list. During gameplay the mod now uses the clipper's no-op result so
+  OpenGL's actual per-eye frustum performs the clip. A desktop 122-degree A/B
+  test changed the frame by 21.17, exposed more wall/floor geometry and restored
+  within 0.46 when disabled. The physical headset confirmation remains.
 - The null-HMD run proves native per-eye rendering and layer submission. The
   acquired 1512x1680 images have 24-bit depth attachments and receive the
   face-list replay directly. A centre readback measured mean luminance
   0.1713/0.1629 and a 0.0446 left/right difference. The desktop side-by-side
   blit remains as the fallback path.
-- Nothing here exercised a real headset. The gate proves API and context
-  coexistence, not that frames reach the Quest. That needs a Virtual Desktop
-  stream session.
+- A physical Virtual Desktop/Quest session exercised the headset path: runtime
+  eye positions, asymmetric FOV, tracking and theater placement were observed.
+  The remaining headset check is the new wide-visibility build, which has only
+  been desktop A/B tested so far.
 
 ## Presentation path
 

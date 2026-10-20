@@ -401,6 +401,9 @@ bool ResolveFramebufferBinding() {
 int g_arg_logs = 0;
 bool g_frustum_reported = false;
 bool g_runtime_projection_reported = false;
+double g_last_frustum[6] = {};
+bool g_has_last_frustum = false;
+void* g_last_frustum_caller = nullptr;
 
 // Defined with the vertex counters below; declared here so the frustum detour
 // can use it too. Each caller keeps its own budget, or the vertex path - which
@@ -414,6 +417,14 @@ extern int g_frustum_samples;
 void WINAPI DetourFrustum(double left, double right, double bottom, double top,
                           double zNear, double zFar) {
     ++g_counts[kFrustum];
+    g_last_frustum_caller = _ReturnAddress();
+    g_last_frustum[0] = left;
+    g_last_frustum[1] = right;
+    g_last_frustum[2] = bottom;
+    g_last_frustum[3] = top;
+    g_last_frustum[4] = zNear;
+    g_last_frustum[5] = zFar;
+    g_has_last_frustum = true;
     // glFrustum always builds a perspective, so this is a 3D pass.
     g_perspective = true;
     if (zNear > 0.0 && zFar > zNear) {
@@ -1104,6 +1115,17 @@ void ReportImpl(unsigned long frame) {
                    frame, g_camera_active.load() ? "yes" : "no",
                    g_perspective.load() ? "yes" : "no",
                    g_transformed_vertices.load());
+    if (g_has_last_frustum) {
+        const double fovY =
+            2.0 * std::atan(g_last_frustum[3] / g_last_frustum[4]) *
+            57.29577951308232;
+        H47VR_LOG_INFO("frame %lu last frustum: l=%.4f r=%.4f b=%.4f t=%.4f "
+                       "near=%.4f far=%.4f vertical_fov=%.2f caller=%p",
+                       frame, g_last_frustum[0], g_last_frustum[1],
+                       g_last_frustum[2], g_last_frustum[3],
+                       g_last_frustum[4], g_last_frustum[5], fovY,
+                       g_last_frustum_caller);
+    }
 }
 
 }  // namespace

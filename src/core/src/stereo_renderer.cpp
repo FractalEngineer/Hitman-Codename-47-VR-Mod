@@ -1,5 +1,6 @@
 #include "h47vr/stereo_renderer.hpp"
 
+#include "h47vr/camera_probe.hpp"
 #include "h47vr/camera_readback.hpp"
 #include "h47vr/gl_probe.hpp"
 #include "h47vr/log.hpp"
@@ -11,6 +12,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -231,6 +233,33 @@ void StereoRendererDrawWorld(void* self, int* list, StereoDrawFn draw) {
                            leftOffset, rightOffset,
                            runtimePose.fovValid ? "enabled" : "unavailable");
         }
+    }
+
+    // Desktop diagnostic for the headset culling path: h47vr-widefov.txt gives
+    // a horizontal FOV in degrees, which is turned into the same asymmetric
+    // per-eye projection OpenXR supplies. This exercises clip bypass and the
+    // widened final projection together without requiring a headset.
+    float diagnosticFov[2][4] = {};
+    const double diagnosticHorizontal =
+        CameraProbeWideFovRadians();
+    if (!runtimePose.fovValid && diagnosticHorizontal > 0.0) {
+        int width = 0;
+        int height = 0;
+        GlStereoSourceSize(&width, &height);
+        const double aspect =
+            width > 0 && height > 0 ? static_cast<double>(width) / height
+                                    : 4.0 / 3.0;
+        const double horizontalHalf = diagnosticHorizontal * 0.5;
+        const double verticalHalf =
+            std::atan(std::tan(horizontalHalf) / aspect);
+        for (int eye = 0; eye < 2; ++eye) {
+            diagnosticFov[eye][0] = static_cast<float>(-horizontalHalf);
+            diagnosticFov[eye][1] = static_cast<float>(horizontalHalf);
+            diagnosticFov[eye][2] = static_cast<float>(verticalHalf);
+            diagnosticFov[eye][3] = static_cast<float>(-verticalHalf);
+        }
+        leftFov = diagnosticFov[0];
+        rightFov = diagnosticFov[1];
     }
 
     if (!GlStereoBeginEye(

@@ -1,8 +1,10 @@
 #include "h47vr/camera_probe.hpp"
 
+#include "h47vr/camera_readback.hpp"
 #include "h47vr/hooks.hpp"
 #include "h47vr/log.hpp"
 #include "h47vr/mod.hpp"
+#include "h47vr/openxr_pose.hpp"
 #include "h47vr/paths.hpp"
 #include "h47vr/symbols.hpp"
 
@@ -22,25 +24,30 @@ void DumpCamera(void* camera, const char* why);
 
 namespace {
 
-// `FUN_0fd53c50` is the ZGEOM `Clip` method: it builds and visibility-tests the
-// draw list for one group of world geometry, and it is where the world vertices
-// are submitted (`glVertex3fv` is reached from inside it). Its last stack
-// argument is the *geometry object*, not the camera - live capture shows a
-// different pointer on every call - so it is only a witness that the world path
-// ran, and a counter for how much geometry a frame contains.
+// `FUN_0fd53c50` is the ZGEOM `Clip` method. It walks one group of world
+// geometry, calls the polygon clipper, and emits the surviving face list toward
+// the renderer.
 constexpr unsigned long kClipRva = 0x00093C50;
 
 // `FUN_0fd56120` is ZCamera.cpp's `CamUpdate`, the per-frame world draw entry.
-// It is the engine frame on both the `glVertex3fv` stack and the `glFrustum`
-// stack. `ECX` differs per call (it runs per geometry group) but its first stack
-// argument is stable, so that one is the scene/render object.
-//
-// The important detail, read out of the machine code rather than the
-// decompiler: CamUpdate stores its own `ECX` into the scratch object it hands to
-// `Clip` (`mov [ebp-0x2018], esi` at 0xfd56279), and Clip then reads three
-// floats from that object - `[ecx+0x106]`, `[ecx+0x10a]`, `[ecx+0x10e]` - and
-// uses them as a rotation. So whatever CamUpdate runs on is camera-shaped.
+// Its first stack argument is a stable gameplay scene container. It is distinct
+// from the renderer's view object sampled below; conflating the two was the
+// source of stale field offsets during earlier probing.
 constexpr unsigned long kCameraUpdateRva = 0x00096120;
+
+// The renderer's view setup reads the active projection constants from its
+// first stack argument, then builds the frustum used for the frame. It runs once
+// per perspective frame, before geometry clipping, so its argument is the live
+// object that owns the FOV/near/far fields relevant to the peripheral-culling
+// bug. The gameplay module's CamUpdate argument is a different scene container.
+constexpr unsigned long kRenderViewSetupRva = 0x00028A40;
+constexpr int kViewFovOffset = 0x16E;
+
+// Clip calls this polygon clipper once per face group. Returning zero is the
+// function's own "geometry did not need clipping" result, leaving the original
+// face list intact for the renderer. During immersive gameplay the engine must
+// not cull against its narrower view; the per-eye OpenGL frustum clips later.
+constexpr unsigned long kPolygonClipRva = 0x00093670;
 
 // Clip decides for itself whether the group is drawn, and stores the answer in
 // its own argument slot as a byte: the box test's result at 0xfd53ea0, a forced
@@ -68,10 +75,34 @@ extern "C" void* h47vr_update_args_target = nullptr;
 // ECX at entry to CamUpdate, saved before anything else can touch it.
 extern "C" void* h47vr_update_ecx = nullptr;
 
+extern "C" void* h47vr_view_trampoline = nullptr;
+extern "C" void* h47vr_view_args_target = nullptr;
+extern "C" void* h47vr_view_ecx = nullptr;
+extern "C" void* h47vr_polygon_clip_trampoline = nullptr;
+
+// Read directly by the naked detour, so it must remain a plain byte.
+unsigned char g_skip_polygon_clip = 0;
+
 std::atomic<unsigned long> g_clip_calls{0};
 std::atomic<void*> g_scene_object{nullptr};
+std::atomic<void*> g_render_view_object{nullptr};
 std::atomic<unsigned long> g_update_calls{0};
 std::wstring g_gate;
+bool g_scene_fields_reported = false;
+std::wstring g_wide_fov_path;
+unsigned int g_wide_fov_ticks = 0;
+std::atomic<double> g_wide_fov_override{0.0};
+
+struct ViewFovState {
+    void* view;
+    double native;
+    double written;
+    bool overridden;
+};
+
+constexpr int kMaxViewFovStates = 8;
+ViewFovState g_view_fov_states[kMaxViewFovStates] = {};
+int g_view_fov_state_count = 0;
 
 // Entry layout: [esp] = return address, ECX = this, stack arguments from
 // [esp+4]. The thunk preserves every register and tail-jumps to the original
@@ -116,6 +147,40 @@ extern "C" __declspec(naked) void h47vr_detour_camera_update() {
         popad
         popfd
         jmp dword ptr [h47vr_update_trampoline]
+    }
+}
+
+// RenderOpenGL's view setup is __thiscall(this, view, char). Preserve its
+// registers and tail-jump to the original entry after sampling both the this
+// pointer and the view object.
+extern "C" __declspec(naked) void h47vr_detour_render_view_setup() {
+    __asm {
+        mov dword ptr [h47vr_view_ecx], ecx
+        pushfd
+        pushad
+        // After pushfd+pushad: eflags at [esp+32], return address at [esp+36],
+        // the view at [esp+40] and the char argument at [esp+44]. Pushing the
+        // second slot first walks both stack arguments out in reverse order.
+        push dword ptr [esp+44]
+        push dword ptr [esp+44]
+        push dword ptr [h47vr_view_ecx]
+        call dword ptr [h47vr_view_args_target]
+        add esp, 12
+        popad
+        popfd
+        jmp dword ptr [h47vr_view_trampoline]
+    }
+}
+
+extern "C" __declspec(naked) void h47vr_detour_polygon_clip() {
+    __asm {
+        cmp byte ptr [g_skip_polygon_clip], 0
+        jne skip
+        jmp dword ptr [h47vr_polygon_clip_trampoline]
+    skip:
+        // __thiscall: ECX is this, and the callee removes three stack arguments.
+        xor eax, eax
+        ret 12
     }
 }
 
@@ -716,10 +781,202 @@ void ObserveCameraUpdate(void* self, void* a1, void* a2) {
     }
 }
 
+void RefreshWideFovOverride() {
+    if (g_wide_fov_path.empty() || (++g_wide_fov_ticks & 0xF) != 0) {
+        return;
+    }
+    if (::GetFileAttributesW(g_wide_fov_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        g_wide_fov_override = 0.0;
+        return;
+    }
+    FILE* file = nullptr;
+    if (::_wfopen_s(&file, g_wide_fov_path.c_str(), L"rb") != 0 || file == nullptr) {
+        return;
+    }
+    char text[128] = {};
+    const size_t read = std::fread(text, 1, sizeof(text) - 1, file);
+    std::fclose(file);
+    text[read] = '\0';
+    const char* value = std::strstr(text, "fov_deg=");
+    if (value == nullptr) {
+        g_wide_fov_override = 0.0;
+        return;
+    }
+    const double degrees = std::atof(value + 8);
+    if (!(degrees >= 35.0 && degrees <= 140.0)) {
+        g_wide_fov_override = 0.0;
+        return;
+    }
+    g_wide_fov_override = degrees * 3.14159265358979323846 / 180.0;
+}
+
+double DesiredVisibilityFov(void* view) {
+    const double forced = g_wide_fov_override.load();
+    if (forced > 0.0) {
+        return forced;
+    }
+
+    OpenXrEyePose pose;
+    if (!CameraReadbackGameplayActive() || !OpenXrPoseGet(&pose) ||
+        !pose.fovValid) {
+        return 0.0;
+    }
+
+    double horizontalHalf = 0.0;
+    double verticalHalf = 0.0;
+    for (int eye = 0; eye < 2; ++eye) {
+        const double left = std::fabs(static_cast<double>(pose.fov[eye][0]));
+        const double right = std::fabs(static_cast<double>(pose.fov[eye][1]));
+        const double up = std::fabs(static_cast<double>(pose.fov[eye][2]));
+        const double down = std::fabs(static_cast<double>(pose.fov[eye][3]));
+        if (right > horizontalHalf) horizontalHalf = right;
+        if (left > horizontalHalf) horizontalHalf = left;
+        if (up > verticalHalf) verticalHalf = up;
+        if (down > verticalHalf) verticalHalf = down;
+    }
+
+    // The renderer field is a horizontal FOV and derives vertical extents from
+    // the viewport aspect. Convert the runtime's vertical extent into the
+    // equivalent horizontal half-angle, then cover whichever axis is wider.
+    // A small margin covers rounding and eye translation.
+    const auto* base = static_cast<const unsigned char*>(view);
+    const double width = *reinterpret_cast<const double*>(base + 0x156);
+    const double height = *reinterpret_cast<const double*>(base + 0x15E);
+    double aspect = 4.0 / 3.0;
+    if (width > 0.0 && height > 0.0 && width < 100000.0 && height < 100000.0) {
+        aspect = width / height;
+    }
+    const double verticalAsHorizontal =
+        std::atan(std::tan(verticalHalf) * aspect);
+    if (verticalAsHorizontal > horizontalHalf) {
+        horizontalHalf = verticalAsHorizontal;
+    }
+    horizontalHalf += 1.0 * 3.14159265358979323846 / 180.0;
+    const double fov = horizontalHalf * 2.0;
+    return fov > 0.1 && fov < 2.45 ? fov : 0.0;
+}
+
+void ApplyVisibilityFov(void* view) {
+    RefreshWideFovOverride();
+    if (!Readable(view, kViewFovOffset + sizeof(double))) {
+        return;
+    }
+    auto* field = reinterpret_cast<double*>(
+        static_cast<unsigned char*>(view) + kViewFovOffset);
+    const double current = *field;
+    if (!(current > 0.1 && current < 2.5)) {
+        return;
+    }
+
+    ViewFovState* state = nullptr;
+    for (int i = 0; i < g_view_fov_state_count; ++i) {
+        if (g_view_fov_states[i].view == view) {
+            state = &g_view_fov_states[i];
+            break;
+        }
+    }
+    if (state == nullptr && g_view_fov_state_count < kMaxViewFovStates) {
+        state = &g_view_fov_states[g_view_fov_state_count++];
+        state->view = view;
+        state->native = current;
+    }
+    if (state == nullptr) {
+        return;
+    }
+    if (state->overridden &&
+        std::fabs(current - state->written) > 1.0e-7) {
+        // The engine replaced our value, so this is the new native FOV.
+        state->native = current;
+    }
+
+    const double desired = DesiredVisibilityFov(view);
+    if (desired > 0.0 && desired > state->native + 1.0e-4) {
+        if (!state->overridden ||
+            std::fabs(desired - state->written) > 1.0e-5) {
+            const char* source = g_wide_fov_override.load() > 0.0
+                                     ? "desktop override"
+                                     : "OpenXR eye union";
+            H47VR_LOG_INFO("visibility: culling horizontal FOV %.2f -> %.2f deg "
+                           "(%s), view %p",
+                           state->native * 57.29577951308232,
+                           desired * 57.29577951308232, source, view);
+            state->written = desired;
+        }
+        state->overridden = true;
+        *field = desired;
+        return;
+    }
+
+    if (state->overridden) {
+        if (std::fabs(current - state->written) <= 1.0e-7) {
+            *field = state->native;
+        }
+        state->overridden = false;
+        state->written = 0.0;
+        H47VR_LOG_INFO("visibility: restored native culling horizontal FOV "
+                       "%.2f deg, view %p",
+                       state->native * 57.29577951308232, view);
+    }
+}
+
+void ObserveRenderViewSetup(void* self, void* view, void* flags) {
+    (void)self;
+    (void)flags;
+    if (view != nullptr && Readable(view, 0x1C0)) {
+        g_render_view_object = view;
+        ApplyVisibilityFov(view);
+    }
+}
+
+// The renderer's view setup reads its projection constants from this object,
+// including the double-precision FOV, near and far fields. Logs the first
+// complete sample while h47vr-camobj.txt exists so culling work is tied to the
+// live object rather than a stale pointer from before a module reload.
+void ReportRenderViewFields() {
+    if (g_scene_fields_reported) {
+        return;
+    }
+    void* camera = g_render_view_object.load();
+    if (camera == nullptr || !Readable(camera, 0x1C0)) {
+        return;
+    }
+
+    const auto* base = static_cast<const unsigned char*>(camera);
+    const auto* doubles = reinterpret_cast<const double*>(base);
+    const unsigned long flags =
+        *reinterpret_cast<const unsigned long*>(base + 0x14E);
+    const auto* f18e = reinterpret_cast<const float*>(base + 0x18E);
+    const auto* f192 = reinterpret_cast<const float*>(base + 0x192);
+    const auto* f196 = reinterpret_cast<const float*>(base + 0x196);
+
+    H47VR_LOG_INFO("render view fields %p: flags=0x%08lX fov=%.9g "
+                   "near=%.9g far=%.9g",
+                   camera, flags,
+                   *reinterpret_cast<const double*>(base + 0x16E),
+                   *reinterpret_cast<const double*>(base + 0x17E),
+                   *reinterpret_cast<const double*>(base + 0x186));
+    H47VR_LOG_INFO("render view fields %p: d156=%.9g d15e=%.9g d1ae=%.9g "
+                   "f18e=%.6g f192=%.6g f196=%.6g",
+                   camera,
+                   *reinterpret_cast<const double*>(base + 0x156),
+                   *reinterpret_cast<const double*>(base + 0x15E),
+                   *reinterpret_cast<const double*>(base + 0x1AE),
+                   f18e[0], f192[0], f196[0]);
+    H47VR_LOG_INFO("render view fields %p: doubles 0x98..0xb8", camera);
+    for (int offset = 0x98; offset <= 0xB8; offset += 8) {
+        H47VR_LOG_INFO("  +0x%03X = %.17g", offset, doubles[offset / 8]);
+    }
+    g_scene_fields_reported = true;
+}
+
 }  // namespace
 
 void* CameraProbeObject() {
     return g_scene_object.load();
+}
+
+double CameraProbeWideFovRadians() {
+    return g_wide_fov_override.load();
 }
 
 bool CameraProbeInstall() {
@@ -729,9 +986,27 @@ bool CameraProbeInstall() {
         return false;
     }
 
+    // A level transition reloads the gameplay module and frees the objects the
+    // previous hooks observed. Reset everything tied to that module before the
+    // new hooks discover the replacement scene and camera objects.
+    g_clip_calls = 0;
+    g_update_calls = 0;
+    g_scene_object = nullptr;
+    g_render_view_object = nullptr;
+    g_scene_fields_reported = false;
+    g_candidate_count = 0;
+    g_found_count = 0;
+    std::memset(g_candidates, 0, sizeof(g_candidates));
+    std::memset(g_found, 0, sizeof(g_found));
+
     g_gate = JoinPath(mod::GameDirectory(), L"h47vr-camobj.txt");
     g_write_path = JoinPath(mod::GameDirectory(), L"h47vr-camwrite.txt");
     g_clip_all_path = JoinPath(mod::GameDirectory(), L"h47vr-clipall.txt");
+    g_wide_fov_path = JoinPath(mod::GameDirectory(), L"h47vr-widefov.txt");
+    g_view_fov_state_count = 0;
+    std::memset(g_view_fov_states, 0, sizeof(g_view_fov_states));
+    g_wide_fov_override = 0.0;
+    g_skip_polygon_clip = 0;
     g_clip_visible_byte =
         reinterpret_cast<unsigned char*>(gameplay) + kClipVisibleByteRva;
     H47VR_LOG_INFO("clip draw-all byte at %p (rva 0x%06lX), currently 0x%02X",
@@ -757,6 +1032,36 @@ bool CameraProbeInstall() {
     }
     H47VR_LOG_INFO("hooked CamUpdate HitmanDlc.dlc rva 0x%06lX at %p",
                    kCameraUpdateRva, update);
+
+    void* polygonClip = reinterpret_cast<char*>(gameplay) + kPolygonClipRva;
+    if (!HookAddress(polygonClip,
+                     reinterpret_cast<void*>(&h47vr_detour_polygon_clip),
+                     &h47vr_polygon_clip_trampoline)) {
+        H47VR_LOG_ERROR("camera probe: could not hook polygon clip "
+                        "HitmanDlc.dlc rva 0x%06lX at %p",
+                        kPolygonClipRva, polygonClip);
+    } else {
+        H47VR_LOG_INFO("hooked polygon clip HitmanDlc.dlc rva 0x%06lX at %p",
+                       kPolygonClipRva, polygonClip);
+    }
+
+    HMODULE renderer = LoadedModule(L"RenderOpenGL.dll");
+    if (renderer != nullptr) {
+        h47vr_view_args_target =
+            reinterpret_cast<void*>(&ObserveRenderViewSetup);
+        void* viewSetup = reinterpret_cast<char*>(renderer) + kRenderViewSetupRva;
+        if (!HookAddress(viewSetup,
+                         reinterpret_cast<void*>(&h47vr_detour_render_view_setup),
+                         &h47vr_view_trampoline)) {
+            H47VR_LOG_ERROR("camera probe: could not hook render view setup "
+                            "RenderOpenGL.dll rva 0x%06lX at %p",
+                            kRenderViewSetupRva, viewSetup);
+        } else {
+            H47VR_LOG_INFO("hooked render view setup RenderOpenGL.dll rva "
+                           "0x%06lX at %p",
+                           kRenderViewSetupRva, viewSetup);
+        }
+    }
     return true;
 }
 
@@ -768,7 +1073,18 @@ bool CameraProbeRearm() {
 // write here lands before the next frame is built.
 void CameraProbeFrame(unsigned long frame) {
     RefreshCameraWrite();
+    RefreshWideFovOverride();
     ApplyClipAlwaysDraw();
+    OpenXrEyePose pose;
+    const bool wantSkipPolygonClip =
+        CameraReadbackGameplayActive() &&
+        ((OpenXrPoseGet(&pose) && pose.fovValid) ||
+         g_wide_fov_override.load() > 0.0);
+    if (wantSkipPolygonClip != (g_skip_polygon_clip != 0)) {
+        g_skip_polygon_clip = wantSkipPolygonClip ? 1 : 0;
+        H47VR_LOG_INFO("visibility: polygon clipping %s for immersive view",
+                       wantSkipPolygonClip ? "bypassed" : "restored");
+    }
     if (!g_write_from_frustum.load()) {
         ApplyCameraWrite();
     }
@@ -835,6 +1151,7 @@ void CameraProbeReport(unsigned long frame) {
     if (::GetFileAttributesW(g_gate.c_str()) == INVALID_FILE_ATTRIBUTES) {
         return;
     }
+    ReportRenderViewFields();
     H47VR_LOG_INFO("frame %lu world probe: %d candidate(s), %lu cam updates, %lu clip calls",
                    frame, g_candidate_count, g_update_calls.load(), g_clip_calls.load());
     for (int i = 0; i < g_candidate_count; ++i) {
